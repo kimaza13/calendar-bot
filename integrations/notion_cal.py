@@ -1,9 +1,15 @@
 from datetime import datetime
-from notion_client import Client
+try:
+    from notion_client import Client
+    _NOTION_AVAILABLE = True
+except ImportError:
+    _NOTION_AVAILABLE = False
 from config import NOTION_TOKEN, NOTION_DATABASE_ID
 
 
-def _get_client() -> Client:
+def _get_client():
+    if not _NOTION_AVAILABLE:
+        raise RuntimeError("notion-client не установлен")
     return Client(auth=NOTION_TOKEN)
 
 

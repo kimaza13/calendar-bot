@@ -1,11 +1,17 @@
 from datetime import datetime, timedelta
-import caldav
+try:
+    import caldav
+    _CALDAV_AVAILABLE = True
+except ImportError:
+    _CALDAV_AVAILABLE = False
 from config import ICLOUD_USERNAME, ICLOUD_PASSWORD
 
 ICLOUD_URL = "https://caldav.icloud.com"
 
 
 def _get_calendar():
+    if not _CALDAV_AVAILABLE:
+        raise RuntimeError("caldav не установлен")
     client = caldav.DAVClient(url=ICLOUD_URL, username=ICLOUD_USERNAME, password=ICLOUD_PASSWORD)
     principal = client.principal()
     calendars = principal.calendars()
