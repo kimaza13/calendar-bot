@@ -1,6 +1,4 @@
 python-telegram-bot==21.6
-SpeechRecognition==3.10.4
-pydub==0.25.1
 openai==1.51.0
 google-api-python-client==2.140.0
 google-auth-oauthlib==1.2.1
