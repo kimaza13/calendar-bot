@@ -1,0 +1,42 @@
+from datetime import datetime, timedelta
+import caldav
+from config import ICLOUD_USERNAME, ICLOUD_PASSWORD
+
+ICLOUD_URL = "https://caldav.icloud.com"
+
+
+def _get_calendar():
+    client = caldav.DAVClient(url=ICLOUD_URL, username=ICLOUD_USERNAME, password=ICLOUD_PASSWORD)
+    principal = client.principal()
+    calendars = principal.calendars()
+    # Use the first available calendar
+    return calendars[0] if calendars else None
+
+
+def create_event(title: str, start: datetime, end: datetime) -> str:
+    cal = _get_calendar()
+    if cal is None:
+        raise RuntimeError("No iCloud calendars found")
+    event = cal.save_event(
+        dtstart=start,
+        dtend=end,
+        summary=title,
+    )
+    return str(event.url)
+
+
+def list_events(days_ahead: int = 7) -> list[dict]:
+    cal = _get_calendar()
+    if cal is None:
+        return []
+    now = datetime.utcnow()
+    events = cal.date_search(start=now, end=now + timedelta(days=days_ahead), expand=True)
+    result = []
+    for e in events:
+        vevent = e.vobject_instance.vevent
+        result.append({
+            "title": str(vevent.summary.value),
+            "start": vevent.dtstart.value,
+            "end": vevent.dtend.value,
+        })
+    return result
