@@ -1,5 +1,5 @@
 python-telegram-bot==21.6
-av==13.1.0
+requests==2.32.5
 openai==1.51.0
 google-api-python-client==2.140.0
 google-auth-oauthlib==1.2.1

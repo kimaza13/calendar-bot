@@ -12,6 +12,7 @@ def _require(key: str) -> str:
 
 
 TELEGRAM_BOT_TOKEN = _require("TELEGRAM_BOT_TOKEN")
+GOOGLE_SPEECH_API_KEY = _require("GOOGLE_SPEECH_API_KEY")
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "credentials.json")
 ICLOUD_USERNAME = os.getenv("ICLOUD_USERNAME", "")
 ICLOUD_PASSWORD = os.getenv("ICLOUD_PASSWORD", "")
