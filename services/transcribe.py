@@ -1,30 +1,17 @@
-import base64
-import json
+import io
 import requests
-from config import GOOGLE_SPEECH_API_KEY
+from config import GROQ_API_KEY
 
-_SPEECH_URL = "https://speech.googleapis.com/v1/speech:recognize"
+_GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
 
 def transcribe(audio_bytes: bytes) -> str:
-    payload = {
-        "config": {
-            "encoding": "OGG_OPUS",
-            "sampleRateHertz": 48000,
-            "languageCode": "ru-RU",
-        },
-        "audio": {
-            "content": base64.b64encode(audio_bytes).decode(),
-        },
-    }
     resp = requests.post(
-        _SPEECH_URL,
-        params={"key": GOOGLE_SPEECH_API_KEY},
-        json=payload,
-        timeout=15,
+        _GROQ_URL,
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+        files={"file": ("voice.ogg", io.BytesIO(audio_bytes), "audio/ogg")},
+        data={"model": "whisper-large-v3-turbo"},
+        timeout=30,
     )
     resp.raise_for_status()
-    results = resp.json().get("results", [])
-    if not results:
-        raise RuntimeError("Речь не распознана — попробуй ещё раз")
-    return results[0]["alternatives"][0]["transcript"]
+    return resp.json()["text"]
