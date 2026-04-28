@@ -1,10 +1,11 @@
+import io
 import json
-import os
-import subprocess
-import tempfile
 import urllib.request
+import wave
 
-# Free Google Web Speech API used by chromium-based clients
+import av
+
+# Free Google Web Speech API used by Chromium
 _GOOGLE_SPEECH_URL = (
     "https://www.google.com/speech-api/v2/recognize"
     "?client=chromium&lang=ru-RU"
@@ -18,22 +19,25 @@ def transcribe(audio_bytes: bytes) -> str:
 
 
 def _ogg_to_wav(audio_bytes: bytes) -> bytes:
-    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as f:
-        f.write(audio_bytes)
-        ogg_path = f.name
-    wav_path = ogg_path[:-4] + ".wav"
-    try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", ogg_path, "-ar", "16000", "-ac", "1", "-sample_fmt", "s16", wav_path],
-            check=True,
-            capture_output=True,
-        )
-        with open(wav_path, "rb") as f:
-            return f.read()
-    finally:
-        os.unlink(ogg_path)
-        if os.path.exists(wav_path):
-            os.unlink(wav_path)
+    container = av.open(io.BytesIO(audio_bytes))
+    audio_stream = next(s for s in container.streams if s.type == "audio")
+
+    resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
+    pcm_chunks = []
+    for frame in container.decode(audio_stream):
+        for rf in resampler.resample(frame):
+            pcm_chunks.append(bytes(rf.planes[0]))
+    for rf in resampler.resample(None):  # flush
+        pcm_chunks.append(bytes(rf.planes[0]))
+
+    pcm = b"".join(pcm_chunks)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)   # 16-bit
+        wf.setframerate(16000)
+        wf.writeframes(pcm)
+    return buf.getvalue()
 
 
 def _recognize(wav_bytes: bytes) -> str:
