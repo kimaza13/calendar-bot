@@ -2,8 +2,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
 import re
 import dateparser.search
+
+_TZ = ZoneInfo("Asia/Tashkent")
 
 
 @dataclass
@@ -76,18 +79,40 @@ def parse_cancellation(text: str) -> Optional[str]:
 
 def parse_event(text: str) -> Optional[ParsedEvent]:
     normalized = _normalize_time_of_day(text)
+    normalized = _normalize_month_names(normalized)
     results = dateparser.search.search_dates(
         normalized,
         languages=["ru", "en"],
-        settings={"PREFER_DATES_FROM": "future", "RETURN_AS_TIMEZONE_AWARE": True},
+        settings={
+            "PREFER_DATES_FROM": "future",
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "TIMEZONE": "Asia/Tashkent",
+        },
     )
     if not results:
         return None
 
-    date_str, dt = results[0]
+    _, dt = _pick_best(results)
     dt = _ensure_future(dt)
-    title = _extract_title(normalized, date_str) or "Событие"
-    return ParsedEvent(title=title, start=dt, end=dt + timedelta(hours=1))
+    title = _extract_title(normalized, *[s for s, _ in results]) or "Событие"
+    result = ParsedEvent(title=title, start=dt, end=dt + timedelta(hours=1))
+    print(f"PARSER DEBUG: normalized='{normalized}' raw_results={[(s, str(d)) for s, d in results]} dt={dt} tzinfo={dt.tzinfo}")
+    return result
+
+
+def _pick_best(results: list) -> tuple:
+    # dateparser sometimes splits "1 мая в 20:00" into two results:
+    # ("1 мая", May-1 00:00) and ("20:00", today 20:00).
+    # Combine: take the date from the midnight result, time from the timed result.
+    if len(results) == 1:
+        return results[0]
+    timed = [(s, d) for s, d in results if d.hour != 0 or d.minute != 0]
+    dated = [(s, d) for s, d in results if d.hour == 0 and d.minute == 0]
+    if timed and dated:
+        _, base = dated[0]
+        _, time_dt = timed[0]
+        return (dated[0][0], base.replace(hour=time_dt.hour, minute=time_dt.minute))
+    return timed[0] if timed else results[0]
 
 
 def _ensure_future(dt: datetime) -> datetime:
@@ -99,8 +124,9 @@ def _ensure_future(dt: datetime) -> datetime:
     return dt
 
 
-def _extract_title(text: str, date_str: str) -> str:
-    title = text.replace(date_str, " ").strip()
-    # Remove leading prepositions left after stripping the date fragment
-    title = re.sub(r"^(в|во|на|at|on)\s+", "", title, flags=re.IGNORECASE)
-    return " ".join(title.split())
+def _extract_title(text: str, *date_strs: str) -> str:
+    for s in date_strs:
+        text = text.replace(s, " ")
+    text = text.strip()
+    text = re.sub(r"^(в|во|на|at|on)\s+", "", text, flags=re.IGNORECASE)
+    return " ".join(text.split())

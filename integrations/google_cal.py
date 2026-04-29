@@ -43,10 +43,14 @@ def _load_token_data() -> dict:
 
 def create_event(title: str, start: datetime, end: datetime) -> str:
     service = _get_service()
+    fmt = "%Y-%m-%dT%H:%M:%S"
+    start_str = start.strftime(fmt)
+    end_str = end.strftime(fmt)
+    print(f"DEBUG google_cal: start={start_str} end={end_str} tz=Asia/Tashkent")
     event = {
         "summary": title,
-        "start": {"dateTime": start.isoformat(), "timeZone": "UTC"},
-        "end": {"dateTime": end.isoformat(), "timeZone": "UTC"},
+        "start": {"dateTime": start_str, "timeZone": "Asia/Tashkent"},
+        "end": {"dateTime": end_str, "timeZone": "Asia/Tashkent"},
     }
     result = service.events().insert(calendarId="primary", body=event).execute()
     return result["id"]

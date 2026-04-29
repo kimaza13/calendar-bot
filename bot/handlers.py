@@ -55,14 +55,18 @@ def _process_text(chat_id: int, text: str) -> None:
         tg.send_message(chat_id, "Не смог распознать дату и время. Попробуй иначе, например: «Зубной врач в пятницу в 10:00»")
         return
 
+    print(f"BEFORE CREATE: start={event.start}, tzinfo={event.start.tzinfo}")
     tg.send_message(chat_id, f"Создаю событие «{event.title}» на {event.start.strftime('%d.%m.%Y %H:%M')}...")
     results = create_event_everywhere(event.title, event.start, event.end)
 
     icons = {"google": "🗓 Google", "apple": "🍎 Apple", "notion": "📝 Notion"}
-    lines = [
-        f"{'✅' if not str(v).startswith('error') else '❌'} {icons[k]}"
-        for k, v in results.items()
-    ]
+    lines = []
+    for k, v in results.items():
+        s = str(v)
+        if s.startswith("error:"):
+            lines.append(f"❌ {icons[k]}: {s[7:]}")
+        else:
+            lines.append(f"✅ {icons[k]}")
     tg.send_message(chat_id, "Готово!\n" + "\n".join(lines))
 
 

@@ -1,3 +1,4 @@
+import traceback
 from datetime import datetime
 from integrations import google_cal, apple_cal, notion_cal
 
@@ -7,14 +8,17 @@ def create_event_everywhere(title: str, start: datetime, end: datetime) -> dict:
     try:
         results["google"] = google_cal.create_event(title, start, end)
     except Exception as e:
+        traceback.print_exc()
         results["google"] = f"error: {e}"
     try:
         results["apple"] = apple_cal.create_event(title, start, end)
     except Exception as e:
+        traceback.print_exc()
         results["apple"] = f"error: {e}"
     try:
         results["notion"] = notion_cal.create_event(title, start, end)
     except Exception as e:
+        traceback.print_exc()
         results["notion"] = f"error: {e}"
     return results
 
