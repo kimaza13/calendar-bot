@@ -80,6 +80,7 @@ def parse_cancellation(text: str) -> Optional[str]:
 def parse_event(text: str) -> Optional[ParsedEvent]:
     normalized = _normalize_time_of_day(text)
     normalized = _normalize_month_names(normalized)
+    print(f"PARSER ENTER: normalized='{normalized}'", flush=True)
     results = dateparser.search.search_dates(
         normalized,
         languages=["ru", "en"],
@@ -87,17 +88,18 @@ def parse_event(text: str) -> Optional[ParsedEvent]:
             "PREFER_DATES_FROM": "future",
             "RETURN_AS_TIMEZONE_AWARE": True,
             "TIMEZONE": "Asia/Tashkent",
+            "PREFER_DAY_OF_MONTH": "first",
         },
     )
+    print(f"PARSER RESULTS: {[(s, str(d)) for s, d in results] if results else None}", flush=True)
     if not results:
         return None
 
     _, dt = _pick_best(results)
     dt = _ensure_future(dt)
     title = _extract_title(normalized, *[s for s, _ in results]) or "Событие"
-    result = ParsedEvent(title=title, start=dt, end=dt + timedelta(hours=1))
-    print(f"PARSER DEBUG: normalized='{normalized}' raw_results={[(s, str(d)) for s, d in results]} dt={dt} tzinfo={dt.tzinfo}")
-    return result
+    print(f"PARSER OUT: dt={dt} tzinfo={dt.tzinfo} title='{title}'", flush=True)
+    return ParsedEvent(title=title, start=dt, end=dt + timedelta(hours=1))
 
 
 def _pick_best(results: list) -> tuple:
