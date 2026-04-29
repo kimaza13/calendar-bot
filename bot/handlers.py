@@ -1,5 +1,7 @@
 from bot import api as tg
 from services.parser import parse_event, parse_cancellation
+from services.reminder_parser import parse_reminder
+from services.reminders import add_reminder, list_reminders, delete_reminder
 from integrations.google_cal import find_events_by_title, delete_event
 from services.sync import create_event_everywhere, list_all_events
 from services.transcribe import transcribe
@@ -16,6 +18,10 @@ def handle_update(update: dict) -> None:
             _cmd_start(chat_id)
         elif text.startswith("/events"):
             _cmd_events(chat_id)
+        elif text.startswith("/reminders"):
+            _cmd_reminders(chat_id)
+        elif text.startswith("/delreminder"):
+            _cmd_del_reminder(chat_id, text)
         else:
             _process_text(chat_id, text)
     elif "voice" in message:
@@ -27,8 +33,13 @@ def _cmd_start(chat_id: int) -> None:
         "Привет! Я помогу управлять твоим календарём.\n\n"
         "Напиши или надиктуй событие, например:\n"
         "  «Встреча с Алёной завтра в 15:00»\n\n"
+        "Повторяющиеся напоминания:\n"
+        "  «Каждый месяц 25-го платёж CJ Logistics в 14:00»\n"
+        "  «Напоминай за 5 дней платёж Samsung 20-го числа»\n\n"
         "Команды:\n"
         "/events — ближайшие события\n"
+        "/reminders — мои напоминания\n"
+        "/delreminder <id> — удалить напоминание\n"
         "/help — помощь"
     )
 
@@ -45,14 +56,27 @@ def _handle_voice(chat_id: int, voice: dict) -> None:
 
 
 def _process_text(chat_id: int, text: str) -> None:
+    # Проверяем — это команда напоминания?
+    reminder = parse_reminder(text)
+    if reminder is not None:
+        _add_reminder(chat_id, reminder)
+        return
+
+    # Проверяем — это отмена события?
     cancel_title = parse_cancellation(text)
     if cancel_title is not None:
         _cancel_event(chat_id, cancel_title)
         return
 
+    # Обычное событие
     event = parse_event(text)
     if event is None:
-        tg.send_message(chat_id, "Не смог распознать дату и время. Попробуй иначе, например: «Зубной врач в пятницу в 10:00»")
+        tg.send_message(
+            chat_id,
+            "Не смог распознать дату и время. Попробуй иначе, например:\n"
+            "  «Зубной врач в пятницу в 10:00»\n"
+            "  «Каждый месяц 25-го платёж Samsung в 14:00»"
+        )
         return
 
     print(f"BEFORE CREATE: start={event.start}, tzinfo={event.start.tzinfo}")
@@ -68,6 +92,27 @@ def _process_text(chat_id: int, text: str) -> None:
         else:
             lines.append(f"✅ {icons[k]}")
     tg.send_message(chat_id, "Готово!\n" + "\n".join(lines))
+
+
+def _add_reminder(chat_id: int, reminder) -> None:
+    try:
+        rid = add_reminder(
+            chat_id=chat_id,
+            title=reminder.title,
+            day_of_month=reminder.day_of_month,
+            remind_days=reminder.remind_days,
+            hour=reminder.hour,
+            minute=reminder.minute,
+        )
+        tg.send_message(
+            chat_id,
+            f"✅ Напоминание добавлено (ID: {rid})\n"
+            f"📌 «{reminder.title}»\n"
+            f"📅 Каждое {reminder.day_of_month}-е число в {reminder.hour:02d}:{reminder.minute:02d}\n"
+            f"⏰ Напомню за {reminder.remind_days} дн. до события"
+        )
+    except Exception as e:
+        tg.send_message(chat_id, f"Ошибка при сохранении напоминания: {e}")
 
 
 def _cancel_event(chat_id: int, title: str) -> None:
@@ -105,3 +150,35 @@ def _cmd_events(chat_id: int) -> None:
             start = start.strftime("%d.%m %H:%M")
         lines.append(f"• {e['title']} — {start} [{e.get('source', '')}]")
     tg.send_message(chat_id, "\n".join(lines))
+
+
+def _cmd_reminders(chat_id: int) -> None:
+    rows = list_reminders(chat_id)
+    if not rows:
+        tg.send_message(
+            chat_id,
+            "У тебя нет активных напоминаний.\n\n"
+            "Добавь: «Каждый месяц 25-го платёж Samsung в 14:00»"
+        )
+        return
+    lines = ["📋 Твои напоминания:\n"]
+    for r in rows:
+        lines.append(
+            f"[{r['id']}] «{r['title']}»\n"
+            f"    📅 {r['day_of_month']}-е число в {r['hour']:02d}:{r['minute']:02d} "
+            f"(напомню за {r['remind_days']} дн.)"
+        )
+    lines.append("\nУдалить: /delreminder <id>")
+    tg.send_message(chat_id, "\n".join(lines))
+
+
+def _cmd_del_reminder(chat_id: int, text: str) -> None:
+    parts = text.strip().split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        tg.send_message(chat_id, "Укажи ID: /delreminder 3")
+        return
+    rid = int(parts[1])
+    if delete_reminder(rid, chat_id):
+        tg.send_message(chat_id, f"✅ Напоминание #{rid} удалено.")
+    else:
+        tg.send_message(chat_id, f"Напоминание #{rid} не найдено.")

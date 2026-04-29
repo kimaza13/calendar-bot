@@ -3,6 +3,8 @@ from flask import Flask, request, jsonify
 from config import TELEGRAM_BOT_TOKEN, WEBHOOK_URL
 from bot import api as tg
 from bot.handlers import handle_update
+from services.reminders import init_db
+from services.scheduler import start_scheduler
 
 app = Flask(__name__)
 
@@ -22,6 +24,8 @@ def health():
 
 
 if __name__ == "__main__":
+    init_db()
+    start_scheduler()
     tg.set_webhook(f"{WEBHOOK_URL}/webhook/{TELEGRAM_BOT_TOKEN}")
     print("Webhook установлен. Бот запущен.")
     port = int(os.environ.get("PORT", 8080))
