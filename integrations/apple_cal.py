@@ -16,7 +16,7 @@ def _get_calendar():
     principal = client.principal()
     calendars = principal.calendars()
     # Use the first available calendar
-    return calendars[0] if calendars else None
+    return list(calendars)[0] if calendars else None
 
 
 def create_event(title: str, start: datetime, end: datetime) -> str:
