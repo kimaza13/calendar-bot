@@ -62,8 +62,12 @@ def _normalize_month_names(text: str) -> str:
         month_num, month_en = _MONTHS_RU[m.group(2).lower()]
         today = date.today()
         year = today.year if (month_num, day) >= (today.month, today.day) else today.year + 1
-        return f"{day} {month_en} {year}"
-    return _MONTH_PATTERN.sub(replace, text)
+        result = f"{day} {month_en} {year}"
+        print(f"NORM MONTH: '{m.group(0)}' → '{result}' (today={today})", flush=True)
+        return result
+    normalized = _MONTH_PATTERN.sub(replace, text)
+    print(f"NORM RESULT: '{text}' → '{normalized}'", flush=True)
+    return normalized
 
 
 _CANCEL_WORDS = re.compile(
