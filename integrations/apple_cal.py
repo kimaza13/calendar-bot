@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+
 try:
     import caldav
     _CALDAV_AVAILABLE = True
@@ -10,22 +11,17 @@ from config import ICLOUD_USERNAME, ICLOUD_PASSWORD
 ICLOUD_URL = "https://caldav.icloud.com"
 
 
-def _get_client():
+def _get_calendar():
     if not _CALDAV_AVAILABLE:
         raise RuntimeError("caldav не установлен")
-    return caldav.DAVClient(
+    client = caldav.DAVClient(
         url=ICLOUD_URL,
         username=ICLOUD_USERNAME,
         password=ICLOUD_PASSWORD
     )
-
-
-def _get_calendar():
-    client = _get_client()
     principal = client.principal()
-    calendars = principal.calendars()
-    cal_list = list(calendars)
-    return cal_list[0] if cal_list else None
+    cals = list(principal.calendars())
+    return cals[0] if cals else None
 
 
 def create_event(title: str, start: datetime, end: datetime) -> str:
