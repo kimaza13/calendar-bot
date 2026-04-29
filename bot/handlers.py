@@ -1,16 +1,31 @@
-from telegram import Update
-from telegram.ext import ContextTypes
+from bot import api as tg
 from services.parser import parse_event, parse_cancellation
 from integrations.google_cal import find_events_by_title, delete_event
 from services.sync import create_event_everywhere, list_all_events
-from services.reminders import schedule_reminder
 from services.transcribe import transcribe
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+def handle_update(update: dict) -> None:
+    message = update.get("message", {})
+    if not message:
+        return
+    chat_id = message["chat"]["id"]
+    if "text" in message:
+        text = message["text"]
+        if text.startswith("/start") or text.startswith("/help"):
+            _cmd_start(chat_id)
+        elif text.startswith("/events"):
+            _cmd_events(chat_id)
+        else:
+            _process_text(chat_id, text)
+    elif "voice" in message:
+        _handle_voice(chat_id, message["voice"])
+
+
+def _cmd_start(chat_id: int) -> None:
+    tg.send_message(chat_id,
         "Привет! Я помогу управлять твоим календарём.\n\n"
-        "Просто напиши событие, например:\n"
+        "Напиши или надиктуй событие, например:\n"
         "  «Встреча с Алёной завтра в 15:00»\n\n"
         "Команды:\n"
         "/events — ближайшие события\n"
@@ -18,77 +33,66 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await _process_text(update, context, update.message.text)
-
-
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tg_file = await context.bot.get_file(update.message.voice.file_id)
-    audio_bytes = bytes(await tg_file.download_as_bytearray())
+def _handle_voice(chat_id: int, voice: dict) -> None:
     try:
+        audio_bytes = tg.get_file_bytes(voice["file_id"])
         text = transcribe(audio_bytes)
     except Exception as e:
-        await update.message.reply_text(f"Не смог распознать голос: {e}")
+        tg.send_message(chat_id, f"Не смог распознать голос: {e}")
         return
-    await update.message.reply_text(f"Распознал: «{text}»")
-    await _process_text(update, context, text)
+    tg.send_message(chat_id, f"Распознал: «{text}»")
+    _process_text(chat_id, text)
 
 
-async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+def _process_text(chat_id: int, text: str) -> None:
     cancel_title = parse_cancellation(text)
     if cancel_title is not None:
-        await _cancel_event(update, cancel_title)
+        _cancel_event(chat_id, cancel_title)
         return
 
     event = parse_event(text)
     if event is None:
-        await update.message.reply_text(
-            "Не смог распознать дату и время. Попробуй иначе, например: «Зубной врач в пятницу в 10:00»"
-        )
+        tg.send_message(chat_id, "Не смог распознать дату и время. Попробуй иначе, например: «Зубной врач в пятницу в 10:00»")
         return
 
-    await update.message.reply_text(
-        f"Создаю событие «{event.title}» на {event.start.strftime('%d.%m.%Y %H:%M')}..."
-    )
+    tg.send_message(chat_id, f"Создаю событие «{event.title}» на {event.start.strftime('%d.%m.%Y %H:%M')}...")
     results = create_event_everywhere(event.title, event.start, event.end)
-    schedule_reminder(context.bot, update.effective_chat.id, event.title, event.start)
 
     icons = {"google": "🗓 Google", "apple": "🍎 Apple", "notion": "📝 Notion"}
     lines = [
         f"{'✅' if not str(v).startswith('error') else '❌'} {icons[k]}"
         for k, v in results.items()
     ]
-    await update.message.reply_text("Готово!\n" + "\n".join(lines))
+    tg.send_message(chat_id, "Готово!\n" + "\n".join(lines))
 
 
-async def _cancel_event(update: Update, title: str):
+def _cancel_event(chat_id: int, title: str) -> None:
     try:
         matches = find_events_by_title(title)
     except Exception as e:
-        await update.message.reply_text(f"Ошибка при поиске события: {e}")
+        tg.send_message(chat_id, f"Ошибка при поиске события: {e}")
         return
 
     if not matches:
-        await update.message.reply_text(f"Не нашёл предстоящих событий по запросу «{title}».")
+        tg.send_message(chat_id, f"Не нашёл предстоящих событий по запросу «{title}».")
         return
 
-    # Delete the nearest match
     event = matches[0]
     event_title = event.get("summary", title)
     start = event.get("start", {}).get("dateTime") or event.get("start", {}).get("date", "")
     try:
         delete_event(event["id"])
     except Exception as e:
-        await update.message.reply_text(f"Не смог удалить событие: {e}")
+        tg.send_message(chat_id, f"Не смог удалить событие: {e}")
         return
 
-    await update.message.reply_text(f"Событие «{event_title}» ({start[:16].replace('T', ' ')}) удалено из Google Calendar.")
+    tg.send_message(chat_id, f"Событие «{event_title}» ({start[:16].replace('T', ' ')}) удалено из Google Calendar.")
 
 
-async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def _cmd_events(chat_id: int) -> None:
     events = list_all_events()
     if not events:
-        await update.message.reply_text("Ближайших событий не найдено.")
+        tg.send_message(chat_id, "Ближайших событий не найдено.")
         return
     lines = []
     for e in events[:10]:
@@ -96,4 +100,4 @@ async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if hasattr(start, "strftime"):
             start = start.strftime("%d.%m %H:%M")
         lines.append(f"• {e['title']} — {start} [{e.get('source', '')}]")
-    await update.message.reply_text("\n".join(lines))
+    tg.send_message(chat_id, "\n".join(lines))

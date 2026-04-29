@@ -1,26 +1,28 @@
-import asyncio
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
-from bot.handlers import start, handle_message, handle_voice, list_events
-from services.reminders import scheduler
-from config import TELEGRAM_BOT_TOKEN
+import os
+from flask import Flask, request, jsonify
+from config import TELEGRAM_BOT_TOKEN, WEBHOOK_URL
+from bot import api as tg
+from bot.handlers import handle_update
+
+app = Flask(__name__)
 
 
-async def main():
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+@app.route(f"/webhook/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
+def webhook():
+    try:
+        handle_update(request.json)
+    except Exception as e:
+        print(f"Update error: {e}")
+    return jsonify({"ok": True})
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", start))
-    app.add_handler(CommandHandler("events", list_events))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
-    await app.initialize()
-    await app.start()
-    scheduler.start()
-    print("Бот запущен...")
-    await app.updater.start_polling()
-    await asyncio.Event().wait()
+@app.route("/health")
+def health():
+    return "ok"
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    tg.set_webhook(f"{WEBHOOK_URL}/webhook/{TELEGRAM_BOT_TOKEN}")
+    print("Webhook установлен. Бот запущен.")
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)

@@ -13,9 +13,9 @@ def _require(key: str) -> str:
 
 TELEGRAM_BOT_TOKEN = _require("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = _require("GROQ_API_KEY")
+WEBHOOK_URL = _require("WEBHOOK_URL")
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "credentials.json")
 ICLOUD_USERNAME = os.getenv("ICLOUD_USERNAME", "")
 ICLOUD_PASSWORD = os.getenv("ICLOUD_PASSWORD", "")
 NOTION_TOKEN = os.getenv("NOTION_TOKEN", "")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID", "")
-REMINDER_MINUTES = int(os.getenv("REMINDER_MINUTES", "15"))
