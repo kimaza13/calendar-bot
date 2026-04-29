@@ -134,9 +134,23 @@ def _ensure_future(dt: datetime) -> datetime:
     return dt
 
 
+_MONTHS_EN_PAT = (
+    r"(?:January|February|March|April|May|June|July"
+    r"|August|September|October|November|December)"
+)
+_DATE_LEFTOVERS = re.compile(
+    r"\b\d{1,2}\s+" + _MONTHS_EN_PAT + r"\s+\d{4}\b"   # "1 May 2026"
+    r"|\b\d{1,2}\s+" + _MONTHS_EN_PAT + r"\b"            # "1 May"
+    r"|\b" + _MONTHS_EN_PAT + r"\s+\d{4}\b"              # "May 2026"
+    r"|\b\d{4}\b"                                          # "2026"
+    r"|\b\d{1,2}:\d{2}\b",                                # "20:00"
+    re.IGNORECASE,
+)
+
+
 def _extract_title(text: str, *date_strs: str) -> str:
     for s in date_strs:
         text = text.replace(s, " ")
-    text = text.strip()
-    text = re.sub(r"^(в|во|на|at|on)\s+", "", text, flags=re.IGNORECASE)
+    text = _DATE_LEFTOVERS.sub(" ", text)
+    text = re.sub(r"^(в|во|на|at|on)\s+", "", text.strip(), flags=re.IGNORECASE)
     return " ".join(text.split())
