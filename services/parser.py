@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Optional
 from zoneinfo import ZoneInfo
 import re
@@ -29,11 +29,12 @@ _TOD_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# "1 мая" / "15 июня" → "01.05" / "15.06"
+# "1 мая" → "1 May 2026"
 _MONTHS_RU = {
-    "января": 1, "февраля": 2, "марта": 3, "апреля": 4,
-    "мая": 5, "июня": 6, "июля": 7, "августа": 8,
-    "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12,
+    "января": (1, "January"), "февраля": (2, "February"), "марта": (3, "March"),
+    "апреля": (4, "April"), "мая": (5, "May"), "июня": (6, "June"),
+    "июля": (7, "July"), "августа": (8, "August"), "сентября": (9, "September"),
+    "октября": (10, "October"), "ноября": (11, "November"), "декабря": (12, "December"),
 }
 _MONTH_PATTERN = re.compile(
     r"\b(\d{1,2})\s+(" + "|".join(_MONTHS_RU) + r")\b",
@@ -58,8 +59,10 @@ def _normalize_time_of_day(text: str) -> str:
 def _normalize_month_names(text: str) -> str:
     def replace(m: re.Match) -> str:
         day = int(m.group(1))
-        month = _MONTHS_RU[m.group(2).lower()]
-        return f"{day:02d}.{month:02d}"
+        month_num, month_en = _MONTHS_RU[m.group(2).lower()]
+        today = date.today()
+        year = today.year if (month_num, day) >= (today.month, today.day) else today.year + 1
+        return f"{day} {month_en} {year}"
     return _MONTH_PATTERN.sub(replace, text)
 
 
