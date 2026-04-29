@@ -66,6 +66,7 @@ _DATEPARSER_SETTINGS = {
     "PREFER_DATES_FROM": "future",
     "RETURN_AS_TIMEZONE_AWARE": True,
     "TIMEZONE": "Asia/Seoul",
+    "TO_TIMEZONE": "Asia/Seoul",
     "PREFER_DAY_OF_MONTH": "first",
 }
 
