@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import re
 import dateparser
 
-_TZ = ZoneInfo("Asia/Tashkent")
+_TZ = ZoneInfo("Asia/Seoul")
 
 
 @dataclass
@@ -65,7 +65,7 @@ _DT_TOKENS = re.compile(
 _DATEPARSER_SETTINGS = {
     "PREFER_DATES_FROM": "future",
     "RETURN_AS_TIMEZONE_AWARE": True,
-    "TIMEZONE": "Asia/Tashkent",
+    "TIMEZONE": "Asia/Seoul",
     "PREFER_DAY_OF_MONTH": "first",
 }
 

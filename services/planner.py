@@ -58,6 +58,10 @@ def plan_day(target: date | None = None) -> str:
                 day_events.append(e)
 
     date_str = target.strftime("%d.%m.%Y")
+
+    if not day_events:
+        return f"На {date_str} событий в календаре нет.\nДобавь события голосом или текстом, например: \"Встреча с бухгалтерией завтра в 10:00\""
+
     events_text = _format_events(day_events)
 
     prompt = f"""События на {date_str}:
@@ -95,6 +99,10 @@ def plan_week(start: date | None = None) -> str:
             week_events.append(e)
 
     period = f"{start.strftime('%d.%m')} – {end.strftime('%d.%m.%Y')}"
+
+    if not week_events:
+        return f"На неделю ({period}) событий в календаре нет.\nДобавь события голосом или текстом, например: \"Платёж поставщику в пятницу в 14:00\""
+
     events_text = _format_events(week_events)
 
     prompt = f"""События на неделю ({period}):

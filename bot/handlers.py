@@ -97,9 +97,9 @@ def _process_text(chat_id: int, text: str) -> None:
     tg.send_message(chat_id, f"Создаю событие «{event.title}» на {event.start.strftime('%d.%m.%Y %H:%M')}...")
     results = create_event_everywhere(event.title, event.start, event.end)
 
-    icons = {"google": "🗓 Google", "apple": "🍎 Apple", "notion": "📝 Notion"}
+    icons = {"google": "🗓 Google", "apple": "🍎 Apple"}
     lines = []
-    for k, v in results.items():
+    for k, v in {k: v for k, v in results.items() if k != "notion"}.items():
         s = str(v)
         if s.startswith("error:"):
             lines.append(f"❌ {icons[k]}: {s[7:]}")
