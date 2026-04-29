@@ -87,6 +87,7 @@ def parse_cancellation(text: str) -> Optional[str]:
 def parse_event(text: str) -> Optional[ParsedEvent]:
     normalized = _normalize_time_of_day(text)
     normalized = _normalize_month_names(normalized)
+    normalized = re.sub(r"\s+в\s+", " ", normalized)
     print(f"PARSER ENTER: normalized='{normalized}'", flush=True)
     results = dateparser.search.search_dates(
         normalized,
