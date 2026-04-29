@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, date
 from typing import Optional
 from zoneinfo import ZoneInfo
 import re
-import dateparser.search
+import dateparser
 
 _TZ = ZoneInfo("Asia/Tashkent")
 
@@ -16,7 +16,7 @@ class ParsedEvent:
     end: datetime
 
 
-# "7 вечера" / "8 часов вечера" → "19:00"
+# "7 вечера" / "8 часов вечера" → "20:00"
 _TIME_OF_DAY = {
     "ночи":   (0,  6),
     "утра":   (0,  11),
@@ -41,6 +41,34 @@ _MONTH_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_MONTHS_EN = (
+    r"(?:January|February|March|April|May|June|July"
+    r"|August|September|October|November|December)"
+)
+_WEEKDAYS_RU = r"(?:понедельник[ауе]?|вторник[ауе]?|среду?|четверг[ауе]?|пятниц[ауе]?|субботу?[ыа]?|воскресень[ею]?)"
+_WEEKDAYS_EN = r"(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)"
+
+# Tokens that represent date/time (after normalization).
+# We pass only these to dateparser, keeping the event title separate.
+_DT_TOKENS = re.compile(
+    r"\b\d{1,2}\s+" + _MONTHS_EN + r"\s+\d{4}\b"           # "1 May 2026"
+    r"|\b\d{1,2}:\d{2}\b"                                    # "20:00"
+    r"|\bчерез\s+\d+\s+\w+"                                  # "через 2 часа"
+    r"|\bпослезавтра\b|\bзавтра\b|\bсегодня\b"               # relative RU
+    r"|\bday after tomorrow\b|\btomorrow\b|\btoday\b"         # relative EN
+    r"|\bследующ\w+\s+(?:" + _WEEKDAYS_EN + r"|" + _WEEKDAYS_RU + r")"
+    r"|\b" + _WEEKDAYS_EN + r"\b"
+    r"|\b" + _WEEKDAYS_RU + r"\b",
+    re.IGNORECASE | re.UNICODE,
+)
+
+_DATEPARSER_SETTINGS = {
+    "PREFER_DATES_FROM": "future",
+    "RETURN_AS_TIMEZONE_AWARE": True,
+    "TIMEZONE": "Asia/Tashkent",
+    "PREFER_DAY_OF_MONTH": "first",
+}
+
 
 def _normalize_time_of_day(text: str) -> str:
     def replace(m: re.Match) -> str:
@@ -62,12 +90,8 @@ def _normalize_month_names(text: str) -> str:
         month_num, month_en = _MONTHS_RU[m.group(2).lower()]
         today = date.today()
         year = today.year if (month_num, day) >= (today.month, today.day) else today.year + 1
-        result = f"{day} {month_en} {year}"
-        print(f"NORM MONTH: '{m.group(0)}' → '{result}' (today={today})", flush=True)
-        return result
-    normalized = _MONTH_PATTERN.sub(replace, text)
-    print(f"NORM RESULT: '{text}' → '{normalized}'", flush=True)
-    return normalized
+        return f"{day} {month_en} {year}"
+    return _MONTH_PATTERN.sub(replace, text)
 
 
 _CANCEL_WORDS = re.compile(
@@ -88,69 +112,31 @@ def parse_event(text: str) -> Optional[ParsedEvent]:
     normalized = _normalize_time_of_day(text)
     normalized = _normalize_month_names(normalized)
     normalized = re.sub(r"\s+в\s+", " ", normalized)
-    print(f"PARSER ENTER: normalized='{normalized}'", flush=True)
-    results = dateparser.search.search_dates(
-        normalized,
-        languages=["ru", "en"],
-        settings={
-            "PREFER_DATES_FROM": "future",
-            "RETURN_AS_TIMEZONE_AWARE": True,
-            "TIMEZONE": "Asia/Tashkent",
-            "PREFER_DAY_OF_MONTH": "first",
-        },
-    )
-    print(f"PARSER RESULTS: {[(s, str(d)) for s, d in results] if results else None}", flush=True)
-    if not results:
+
+    # Extract date/time tokens; pass only them to dateparser (no Russian title text).
+    tokens = _DT_TOKENS.findall(normalized)
+    dt_str = " ".join(t.strip() for t in tokens)
+    if not dt_str:
         return None
 
-    _, dt = _pick_best(results)
+    # Title is everything that is NOT a date/time token.
+    title = _DT_TOKENS.sub(" ", normalized).strip()
+    title = re.sub(r"^(в|во|на|at|on)\s+", "", title, flags=re.IGNORECASE)
+    title = " ".join(title.split()) or "Событие"
+
+    print(f"PARSER: dt_str='{dt_str}' title='{title}'", flush=True)
+
+    dt = dateparser.parse(dt_str, languages=["ru", "en"], settings=_DATEPARSER_SETTINGS)
+    if not dt:
+        return None
+
     dt = _ensure_future(dt)
-    title = _extract_title(normalized, *[s for s, _ in results]) or "Событие"
-    print(f"PARSER OUT: dt={dt} tzinfo={dt.tzinfo} title='{title}'", flush=True)
+    print(f"PARSER OUT: dt={dt} title='{title}'", flush=True)
     return ParsedEvent(title=title, start=dt, end=dt + timedelta(hours=1))
-
-
-def _pick_best(results: list) -> tuple:
-    # dateparser sometimes splits "1 мая в 20:00" into two results:
-    # ("1 мая", May-1 00:00) and ("20:00", today 20:00).
-    # Combine: take the date from the midnight result, time from the timed result.
-    if len(results) == 1:
-        return results[0]
-    timed = [(s, d) for s, d in results if d.hour != 0 or d.minute != 0]
-    dated = [(s, d) for s, d in results if d.hour == 0 and d.minute == 0]
-    if timed and dated:
-        _, base = dated[0]
-        _, time_dt = timed[0]
-        return (dated[0][0], base.replace(hour=time_dt.hour, minute=time_dt.minute))
-    return timed[0] if timed else results[0]
 
 
 def _ensure_future(dt: datetime) -> datetime:
     now = datetime.now(tz=dt.tzinfo)
-    # Compare by date only: if the date itself is in the past, advance by weeks.
-    # Avoids bumping "сегодня" (midnight) into next week just because time passed.
     while dt.date() < now.date():
         dt += timedelta(days=7)
     return dt
-
-
-_MONTHS_EN_PAT = (
-    r"(?:January|February|March|April|May|June|July"
-    r"|August|September|October|November|December)"
-)
-_DATE_LEFTOVERS = re.compile(
-    r"\b\d{1,2}\s+" + _MONTHS_EN_PAT + r"\s+\d{4}\b"   # "1 May 2026"
-    r"|\b\d{1,2}\s+" + _MONTHS_EN_PAT + r"\b"            # "1 May"
-    r"|\b" + _MONTHS_EN_PAT + r"\s+\d{4}\b"              # "May 2026"
-    r"|\b\d{4}\b"                                          # "2026"
-    r"|\b\d{1,2}:\d{2}\b",                                # "20:00"
-    re.IGNORECASE,
-)
-
-
-def _extract_title(text: str, *date_strs: str) -> str:
-    for s in date_strs:
-        text = text.replace(s, " ")
-    text = _DATE_LEFTOVERS.sub(" ", text)
-    text = re.sub(r"^(в|во|на|at|on)\s+", "", text.strip(), flags=re.IGNORECASE)
-    return " ".join(text.split())
