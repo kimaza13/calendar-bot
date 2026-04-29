@@ -13,16 +13,28 @@ class ParsedEvent:
     end: datetime
 
 
-# "7 вечера" → "19:00", "10 утра" → "10:00", etc.
+# "7 вечера" / "8 часов вечера" → "19:00"
 _TIME_OF_DAY = {
-    "ночи":   (0,  6),   # 1 ночи → 01:00
-    "утра":   (0,  11),  # 10 утра → 10:00
-    "дня":    (12, 17),  # 3 дня → 15:00
-    "вечера": (12, 23),  # 7 вечера → 19:00
+    "ночи":   (0,  6),
+    "утра":   (0,  11),
+    "дня":    (12, 17),
+    "вечера": (12, 23),
 }
 
 _TOD_PATTERN = re.compile(
-    r"\b(\d{1,2})(?::(\d{2}))?\s+(ночи|утра|дня|вечера)\b", re.IGNORECASE
+    r"\b(\d{1,2})(?::(\d{2}))?\s+(?:час(?:ов|а)?\s+)?(ночи|утра|дня|вечера)\b",
+    re.IGNORECASE,
+)
+
+# "1 мая" / "15 июня" → "01.05" / "15.06"
+_MONTHS_RU = {
+    "января": 1, "февраля": 2, "марта": 3, "апреля": 4,
+    "мая": 5, "июня": 6, "июля": 7, "августа": 8,
+    "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12,
+}
+_MONTH_PATTERN = re.compile(
+    r"\b(\d{1,2})\s+(" + "|".join(_MONTHS_RU) + r")\b",
+    re.IGNORECASE,
 )
 
 
@@ -31,13 +43,21 @@ def _normalize_time_of_day(text: str) -> str:
         hour = int(m.group(1))
         minutes = m.group(2) or "00"
         period = m.group(3).lower()
-        low, high = _TIME_OF_DAY[period]
+        low, _ = _TIME_OF_DAY[period]
         if hour < 12 and low >= 12:
             hour += 12
         elif hour == 12 and low == 0:
             hour = 0
         return f"{hour:02d}:{minutes}"
     return _TOD_PATTERN.sub(replace, text)
+
+
+def _normalize_month_names(text: str) -> str:
+    def replace(m: re.Match) -> str:
+        day = int(m.group(1))
+        month = _MONTHS_RU[m.group(2).lower()]
+        return f"{day:02d}.{month:02d}"
+    return _MONTH_PATTERN.sub(replace, text)
 
 
 _CANCEL_WORDS = re.compile(
