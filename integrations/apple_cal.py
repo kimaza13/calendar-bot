@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta
+import uuid
 
 try:
     import caldav
-    from icalendar import Calendar, Event as iEvent
     _CALDAV_AVAILABLE = True
 except ImportError:
     _CALDAV_AVAILABLE = False
@@ -29,17 +29,20 @@ def create_event(title: str, start: datetime, end: datetime) -> str:
     cal = _get_calendar()
     if cal is None:
         raise RuntimeError("No iCloud calendars found")
-    import uuid
-    vcal = Calendar()
-    vcal.add("prodid", "-//Calendar Bot//EN")
-    vcal.add("version", "2.0")
-    event = iEvent()
-    event.add("summary", title)
-    event.add("dtstart", start)
-    event.add("dtend", end)
-    event.add("uid", str(uuid.uuid4()))
-    vcal.add_component(event)
-    result = cal.add_event(vcal.to_ical())
+    uid = str(uuid.uuid4())
+    fmt = "%Y%m%dT%H%M%S"
+    ical = (
+        "BEGIN:VCALENDAR\r\n"
+        "VERSION:2.0\r\n"
+        "BEGIN:VEVENT\r\n"
+        f"UID:{uid}\r\n"
+        f"SUMMARY:{title}\r\n"
+        f"DTSTART:{start.strftime(fmt)}\r\n"
+        f"DTEND:{end.strftime(fmt)}\r\n"
+        "END:VEVENT\r\n"
+        "END:VCALENDAR\r\n"
+    )
+    result = cal.add_event(ical)
     return str(result.url)
 
 
