@@ -5,6 +5,8 @@ from bot import api as tg
 from bot.handlers import handle_update
 from services.reminders import init_db
 from services.scheduler import start_scheduler
+import threading
+import time
 
 app = Flask(__name__)
 
@@ -22,10 +24,19 @@ def webhook():
 def health():
     return "ok"
 
+def _keep_alive():
+    import requests
+    while True:
+        time.sleep(600)  # каждые 10 минут
+        try:
+            requests.get(f"{WEBHOOK_URL}/health", timeout=10)
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     init_db()
     start_scheduler()
+    threading.Thread(target=_keep_alive, daemon=True, name="keep-alive").start()
     tg.set_webhook(f"{WEBHOOK_URL}/webhook/{TELEGRAM_BOT_TOKEN}")
     print("Webhook установлен. Бот запущен.")
     port = int(os.environ.get("PORT", 8080))
