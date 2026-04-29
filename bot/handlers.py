@@ -5,6 +5,8 @@ from services.reminders import add_reminder, list_reminders, delete_reminder
 from integrations.google_cal import find_events_by_title, delete_event
 from services.sync import create_event_everywhere, list_all_events
 from services.transcribe import transcribe
+from services.planner import plan_day, plan_week
+
 
 
 def handle_update(update: dict) -> None:
@@ -20,6 +22,10 @@ def handle_update(update: dict) -> None:
             _cmd_events(chat_id)
         elif text.startswith("/reminders"):
             _cmd_reminders(chat_id)
+        elif text.startswith("/plan"):
+            _cmd_plan(chat_id)
+        elif text.startswith("/week"):
+            _cmd_week(chat_id)
         elif text.startswith("/delreminder"):
             _cmd_del_reminder(chat_id, text)
         else:
@@ -63,6 +69,14 @@ def _process_text(chat_id: int, text: str) -> None:
         return
 
     # Проверяем — это отмена события?
+    low = text.lower().strip()
+    if "план на сегодня" in low or "план дня" in low:
+        _cmd_plan(chat_id)
+        return
+    if "план на неделю" in low or "план недели" in low:
+        _cmd_week(chat_id)
+        return
+
     cancel_title = parse_cancellation(text)
     if cancel_title is not None:
         _cancel_event(chat_id, cancel_title)
@@ -182,3 +196,15 @@ def _cmd_del_reminder(chat_id: int, text: str) -> None:
         tg.send_message(chat_id, f"✅ Напоминание #{rid} удалено.")
     else:
         tg.send_message(chat_id, f"Напоминание #{rid} не найдено.")
+
+
+def _cmd_plan(chat_id: int) -> None:
+    tg.send_message(chat_id, "Составляю план на сегодня...")
+    result = plan_day()
+    tg.send_message(chat_id, result)
+
+
+def _cmd_week(chat_id: int) -> None:
+    tg.send_message(chat_id, "Составляю план на неделю...")
+    result = plan_week()
+    tg.send_message(chat_id, result)
