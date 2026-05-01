@@ -76,16 +76,18 @@ def _process_text(chat_id: int, text: str) -> None:
     # Проверяем — это отмена события?
     low = text.lower().strip()
 
-    # Обработка подтверждения события
+    # Обработка подтверждения удаления
+    if chat_id in _pending_deletions:
+        if low in ("да", "yes", "✅", "ок", "ok", "удалить", "подтвердить"):
+            _confirm_deletion(chat_id)
+            return
+        elif low in ("нет", "no", "❌", "отмена", "отменить", "cancel"):
+            _pending_deletions.pop(chat_id, None)
+            tg.send_message(chat_id, "Удаление отменено.")
+            return
+
+    # Обработка подтверждения создания события
     if chat_id in _pending_events:
-        if chat_id in _pending_deletions:
-            if low in ("да", "yes", "✅", "ок", "ok", "удалить", "подтвердить"):
-                _confirm_deletion(chat_id)
-                return
-            elif low in ("нет", "no", "❌", "отмена", "отменить", "cancel"):
-                _pending_deletions.pop(chat_id, None)
-                tg.send_message(chat_id, "Удаление отменено.")
-                return
         if low in ("да", "yes", "✅", "ок", "ok", "создать", "подтвердить"):
             _confirm_event(chat_id)
             return
