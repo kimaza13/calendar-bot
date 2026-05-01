@@ -11,11 +11,6 @@ def create_event_everywhere(title: str, start: datetime, end: datetime) -> dict:
         traceback.print_exc()
         results["google"] = f"error: {e}"
     try:
-        results["apple"] = apple_cal.create_event(title, start, end)
-    except Exception as e:
-        traceback.print_exc()
-        results["apple"] = f"error: {e}"
-    try:
         results["notion"] = notion_cal.create_event(title, start, end)
     except Exception as e:
         traceback.print_exc()
@@ -27,7 +22,6 @@ def list_all_events() -> list[dict]:
     events = []
     for source, fetcher in [
         ("Google", google_cal.list_events),
-        ("Apple", apple_cal.list_events),
         ("Notion", notion_cal.list_events),
     ]:
         try:
