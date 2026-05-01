@@ -7,6 +7,9 @@ from services.sync import create_event_everywhere, list_all_events
 from services.transcribe import transcribe
 from services.planner import plan_day, plan_week
 
+# Хранилище событий ожидающих подтверждения: {chat_id: ParsedEvent}
+_pending_events: dict = {}
+
 
 
 def handle_update(update: dict) -> None:
@@ -70,6 +73,17 @@ def _process_text(chat_id: int, text: str) -> None:
 
     # Проверяем — это отмена события?
     low = text.lower().strip()
+
+    # Обработка подтверждения события
+    if chat_id in _pending_events:
+        if low in ("да", "yes", "✅", "ок", "ok", "создать", "подтвердить"):
+            _confirm_event(chat_id)
+            return
+        elif low in ("нет", "no", "❌", "отмена", "отменить", "cancel"):
+            _pending_events.pop(chat_id, None)
+            tg.send_message(chat_id, "Отменено.")
+            return
+
     if "план на сегодня" in low or "план дня" in low:
         _cmd_plan(chat_id)
         return
@@ -94,18 +108,13 @@ def _process_text(chat_id: int, text: str) -> None:
         return
 
     print(f"BEFORE CREATE: start={event.start}, tzinfo={event.start.tzinfo}")
-    tg.send_message(chat_id, f"Создаю событие «{event.title}» на {event.start.strftime('%d.%m.%Y %H:%M')}...")
-    results = create_event_everywhere(event.title, event.start, event.end)
-
-    icons = {"google": "🗓 Google", "apple": "🍎 Apple"}
-    lines = []
-    for k, v in {k: v for k, v in results.items() if k != "notion"}.items():
-        s = str(v)
-        if s.startswith("error:"):
-            lines.append(f"❌ {icons[k]}: {s[7:]}")
-        else:
-            lines.append(f"✅ {icons[k]}")
-    tg.send_message(chat_id, "Готово!\n" + "\n".join(lines))
+    _pending_events[chat_id] = event
+    tg.send_message(
+        chat_id,
+        f"Распознал: «{event.title}»\n"
+        f"📅 {event.start.strftime('%d.%m.%Y')} в {event.start.strftime('%H:%M')}\n\n"
+        f"Создать событие в календаре? (да / нет)"
+    )
 
 
 def _add_reminder(chat_id: int, reminder) -> None:
@@ -128,6 +137,24 @@ def _add_reminder(chat_id: int, reminder) -> None:
     except Exception as e:
         tg.send_message(chat_id, f"Ошибка при сохранении напоминания: {e}")
 
+
+
+def _confirm_event(chat_id: int) -> None:
+    event = _pending_events.pop(chat_id, None)
+    if event is None:
+        tg.send_message(chat_id, "Нет события для создания.")
+        return
+    tg.send_message(chat_id, f"Создаю «{event.title}»...")
+    results = create_event_everywhere(event.title, event.start, event.end)
+    lines = []
+    for k, v in {k: v for k, v in results.items() if k != "notion"}.items():
+        s = str(v)
+        icons = {"google": "🗓 Google", "apple": "🍎 Apple"}
+        if s.startswith("error:"):
+            lines.append(f"❌ {icons.get(k, k)}: {s[7:]}")
+        else:
+            lines.append(f"✅ {icons.get(k, k)}")
+    tg.send_message(chat_id, "Готово!\n" + "\n".join(lines))
 
 def _cancel_event(chat_id: int, title: str) -> None:
     try:
