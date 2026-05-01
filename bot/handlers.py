@@ -9,6 +9,8 @@ from services.planner import plan_day, plan_week
 
 # Хранилище событий ожидающих подтверждения: {chat_id: ParsedEvent}
 _pending_events: dict = {}
+# Хранилище событий ожидающих удаления: {chat_id: event_dict}
+_pending_deletions: dict = {}
 
 
 
@@ -76,6 +78,14 @@ def _process_text(chat_id: int, text: str) -> None:
 
     # Обработка подтверждения события
     if chat_id in _pending_events:
+        if chat_id in _pending_deletions:
+            if low in ("да", "yes", "✅", "ок", "ok", "удалить", "подтвердить"):
+                _confirm_deletion(chat_id)
+                return
+            elif low in ("нет", "no", "❌", "отмена", "отменить", "cancel"):
+                _pending_deletions.pop(chat_id, None)
+                tg.send_message(chat_id, "Удаление отменено.")
+                return
         if low in ("да", "yes", "✅", "ок", "ok", "создать", "подтвердить"):
             _confirm_event(chat_id)
             return
@@ -139,6 +149,19 @@ def _add_reminder(chat_id: int, reminder) -> None:
 
 
 
+def _confirm_deletion(chat_id: int) -> None:
+    event = _pending_deletions.pop(chat_id, None)
+    if event is None:
+        tg.send_message(chat_id, "Нет события для удаления.")
+        return
+    event_title = event.get("summary", "")
+    try:
+        delete_event(event["id"])
+        tg.send_message(chat_id, f"✅ Событие «{event_title}» удалено из Google Calendar.")
+    except Exception as e:
+        tg.send_message(chat_id, f"Не смог удалить событие: {e}")
+
+
 def _confirm_event(chat_id: int) -> None:
     event = _pending_events.pop(chat_id, None)
     if event is None:
@@ -170,13 +193,14 @@ def _cancel_event(chat_id: int, title: str) -> None:
     event = matches[0]
     event_title = event.get("summary", title)
     start = event.get("start", {}).get("dateTime") or event.get("start", {}).get("date", "")
-    try:
-        delete_event(event["id"])
-    except Exception as e:
-        tg.send_message(chat_id, f"Не смог удалить событие: {e}")
-        return
-
-    tg.send_message(chat_id, f"Событие «{event_title}» ({start[:16].replace('T', ' ')}) удалено из Google Calendar.")
+    start_str = start[:16].replace("T", " ") if start else ""
+    _pending_deletions[chat_id] = event
+    tg.send_message(
+        chat_id,
+        f"Найдено событие: «{event_title}»\n"
+        f"📅 {start_str}\n\n"
+        f"Удалить из Google Calendar? (да / нет)"
+    )
 
 
 def _cmd_events(chat_id: int) -> None:
