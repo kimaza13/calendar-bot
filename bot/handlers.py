@@ -22,8 +22,6 @@ def handle_update(update: dict) -> None:
             _cmd_events(chat_id)
         elif text.startswith("/reminders"):
             _cmd_reminders(chat_id)
-        elif text.startswith("/debug"):
-            _cmd_debug(chat_id)
         elif text.startswith("/plan"):
             _cmd_plan(chat_id)
         elif text.startswith("/week"):
@@ -210,18 +208,3 @@ def _cmd_week(chat_id: int) -> None:
     tg.send_message(chat_id, "Составляю план на неделю...")
     result = plan_week()
     tg.send_message(chat_id, result)
-
-
-def _cmd_debug(chat_id: int) -> None:
-    try:
-        import caldav
-        ver = caldav.__version__
-    except Exception as e:
-        ver = f"error: {e}"
-    try:
-        from integrations.apple_cal import _get_calendar
-        cal = _get_calendar()
-        cal_info = str(type(cal))
-    except Exception as e:
-        cal_info = f"error: {e}"
-    tg.send_message(chat_id, f"caldav version: {ver}\ncalendar: {cal_info}")
