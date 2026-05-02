@@ -6,6 +6,7 @@ from integrations.google_cal import find_events_by_title, delete_event
 from services.sync import create_event_everywhere, list_all_events
 from services.transcribe import transcribe
 from services.planner import plan_day, plan_week
+from services.vision import extract_events_from_image
 
 # Хранилище событий ожидающих подтверждения: {chat_id: ParsedEvent}
 _pending_events: dict = {}
@@ -53,6 +54,43 @@ def _cmd_start(chat_id: int) -> None:
         "/delreminder <id> — удалить напоминание\n"
         "/help — помощь"
     )
+
+
+def _handle_photo(chat_id: int, photos: list) -> None:
+    try:
+        best = max(photos, key=lambda p: p.get('file_size', 0))
+        image_bytes = tg.get_file_bytes(best['file_id'])
+        tg.send_message(chat_id, 'Анализирую изображение...')
+        events = extract_events_from_image(image_bytes)
+    except Exception as e:
+        tg.send_message(chat_id, f'Не смог обработать фото: {e}')
+        return
+    if not events:
+        tg.send_message(chat_id, 'Не нашёл событий с датами на этом изображении.')
+        return
+    for evt in events:
+        from datetime import datetime, timedelta
+        try:
+            dt = datetime.strptime(f"{evt['date']} {evt['time']}", '%Y-%m-%d %H:%M')
+            from zoneinfo import ZoneInfo
+            dt = dt.replace(tzinfo=ZoneInfo('Asia/Seoul'))
+        except Exception:
+            tg.send_message(chat_id, f'Нашёл событие «{evt["title"]}», но не смог разобрать дату.')
+            continue
+        from services.parser import ParsedEvent
+        event = ParsedEvent(title=evt['title'], start=dt, end=dt + timedelta(minutes=evt.get('duration', 60)))
+        _pending_events[chat_id] = event
+        notes = f'
+📝 {evt["notes"]}' if evt.get('notes') else ''
+        tg.send_message(
+            chat_id,
+            f'Распознал: «{event.title}»
+'
+            f'📅 {event.start.strftime("%d.%m.%Y")} в {event.start.strftime("%H:%M")}{notes}
+
+'
+            f'Создать событие в календаре? (да / нет)'
+        )
 
 
 def _handle_voice(chat_id: int, voice: dict) -> None:
