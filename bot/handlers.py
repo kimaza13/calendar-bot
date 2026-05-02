@@ -83,12 +83,9 @@ def _handle_photo(chat_id: int, photos: list) -> None:
         notes = ('\n📝 ' + evt['notes']) if evt.get('notes') else ''
         tg.send_message(
             chat_id,
-            f'Распознал: «{event.title}»
-'
-            f'📅 {event.start.strftime("%d.%m.%Y")} в {event.start.strftime("%H:%M")}{notes}
-
-'
-            f'Создать событие в календаре? (да / нет)'
+            'Raspoznal: "' + event.title + '"\n'
+            + event.start.strftime('%d.%m.%Y') + ' v ' + event.start.strftime('%H:%M') + notes + '\n\n'
+            + 'Sozdat sobytie v kalendare? (da / net)'
         )
 
 
