@@ -39,6 +39,8 @@ def handle_update(update: dict) -> None:
     elif "voice" in message:
         _handle_voice(chat_id, message["voice"])
 
+    elif 'photo' in message:
+        _handle_photo(chat_id, message['photo'])
 
 def _cmd_start(chat_id: int) -> None:
     tg.send_message(chat_id,
