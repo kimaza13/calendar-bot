@@ -80,8 +80,7 @@ def _handle_photo(chat_id: int, photos: list) -> None:
         from services.parser import ParsedEvent
         event = ParsedEvent(title=evt['title'], start=dt, end=dt + timedelta(minutes=evt.get('duration', 60)))
         _pending_events[chat_id] = event
-        notes = f'
-📝 {evt["notes"]}' if evt.get('notes') else ''
+        notes = ('\n📝 ' + evt['notes']) if evt.get('notes') else ''
         tg.send_message(
             chat_id,
             f'Распознал: «{event.title}»
