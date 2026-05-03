@@ -13,28 +13,7 @@ _PROMPT = """Ты помощник финансиста работающего �
 Для рейсов используй время вылета."""
 
 
-def _compress_image(image_bytes: bytes, max_size: int = 3 * 1024 * 1024) -> bytes:
-    """Сжимает изображение если оно больше max_size байт."""
-    if len(image_bytes) <= max_size:
-        return image_bytes
-    try:
-        from PIL import Image
-        import io
-        img = Image.open(io.BytesIO(image_bytes))
-        quality = 85
-        while quality > 20:
-            buffer = io.BytesIO()
-            img.save(buffer, format="JPEG", quality=quality)
-            if buffer.tell() <= max_size:
-                return buffer.getvalue()
-            quality -= 15
-        return buffer.getvalue()
-    except Exception:
-        return image_bytes
-
-
 def extract_events_from_image(image_bytes: bytes) -> list:
-    image_bytes = _compress_image(image_bytes)
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
     resp = requests.post(
         _GROQ_URL,
