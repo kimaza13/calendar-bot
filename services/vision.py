@@ -19,7 +19,7 @@ def extract_events_from_image(image_bytes: bytes) -> list:
         _GROQ_URL,
         headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
         json={
-            "model": "llama-3.2-90b-vision-preview",
+            "model": "meta-llama/llama-4-scout-17b-16e-instruct",
             "messages": [
                 {"role": "user", "content": [
                     {"type": "text", "text": _PROMPT},
