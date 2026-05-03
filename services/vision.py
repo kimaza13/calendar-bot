@@ -5,14 +5,12 @@ from config import GROQ_API_KEY
 
 _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-_SYSTEM_PROMPT = """Ты помощник финансиста работающего в Южной Корее.
-Тебе дают изображение - билет, счет, скриншот письма или документ.
-Извлеки все события с датами и временем.
-Верни ТОЛЬКО JSON без markdown и пояснений:
+_PROMPT = """Ты помощник финансиста работающего в Южной Корее.
+Извлеки все события с датами из изображения.
+Верни ТОЛЬКО JSON без markdown:
 {"events": [{"title": "название на русском", "date": "YYYY-MM-DD", "time": "HH:MM", "duration": 60, "notes": "заметка"}]}
 Если событий нет - верни {"events": []}.
-Для рейсов используй время вылета.
-Если год не указан - используй ближайший подходящий год."""
+Для рейсов используй время вылета."""
 
 
 def extract_events_from_image(image_bytes: bytes) -> list:
@@ -24,9 +22,7 @@ def extract_events_from_image(image_bytes: bytes) -> list:
             "model": "llama-3.2-11b-vision-preview",
             "messages": [
                 {"role": "user", "content": [
-                    {"type": "text", "text": _SYSTEM_PROMPT + "
-
-Извлеки все события с датами из этого изображения."},
+                    {"type": "text", "text": _PROMPT},
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}
                 ]}
             ],
