@@ -83,13 +83,12 @@ def _handle_photo(chat_id: int, photos: list) -> None:
         event = ParsedEvent(title=evt['title'], start=dt, end=dt + timedelta(minutes=evt.get('duration', 60)))
         _pending_events[chat_id] = event
         notes = ('\n📝 ' + evt['notes']) if evt.get('notes') else ''
-       tg.send_message(
+        tg.send_message(
             chat_id,
             'Распознал: ' + event.title + '\n'
             + event.start.strftime('%d.%m.%Y') + ' в ' + event.start.strftime('%H:%M') + notes + '\n\n'
             + 'Создать событие в календаре? (да / нет)'
         )
-
 
 def _handle_voice(chat_id: int, voice: dict) -> None:
     try:
