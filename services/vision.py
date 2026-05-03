@@ -23,10 +23,11 @@ def extract_events_from_image(image_bytes: bytes) -> list:
         json={
             "model": "llama-3.2-11b-vision-preview",
             "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                    {"type": "text", "text": "Извлеки все события с датами из этого изображения."}
+                    {"type": "text", "text": _SYSTEM_PROMPT + "
+
+Извлеки все события с датами из этого изображения."},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}
                 ]}
             ],
             "max_tokens": 1000,
