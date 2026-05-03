@@ -22,7 +22,13 @@ def extract_events_from_image(image_bytes: bytes) -> list:
         headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
         json={
             "model": "llama-3.2-11b-vision-preview",
-            "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}, {"type": "text", "text": "Извлеки все события с датами из этого изображения."}]}],
+            "messages": [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                    {"type": "text", "text": "Извлеки все события с датами из этого изображения."}
+                ]}
+            ],
             "max_tokens": 1000,
             "temperature": 0.1,
         },
