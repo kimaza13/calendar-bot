@@ -1,5 +1,8 @@
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
 from bot import api as tg
-from services.parser import parse_event, parse_cancellation
+from services.parser import parse_event, parse_cancellation, ParsedEvent
 from services.reminder_parser import parse_reminder
 from services.reminders import add_reminder, list_reminders, delete_reminder
 from integrations.google_cal import find_events_by_title, delete_event
@@ -15,6 +18,9 @@ _pending_deletions: dict = {}
 
 
 def handle_update(update: dict) -> None:
+    if "callback_query" in update:
+        _handle_callback(update["callback_query"])
+        return
     message = update.get("message", {})
     if not message:
         return
@@ -23,6 +29,8 @@ def handle_update(update: dict) -> None:
         text = message["text"]
         if text.startswith("/start") or text.startswith("/help"):
             _cmd_start(chat_id)
+        elif text.startswith("/cancel"):
+            _cmd_cancel(chat_id)
         elif text.startswith("/events"):
             _cmd_events(chat_id)
         elif text.startswith("/reminders"):
@@ -37,8 +45,8 @@ def handle_update(update: dict) -> None:
             _process_text(chat_id, text)
     elif "voice" in message:
         _handle_voice(chat_id, message["voice"])
-    elif 'photo' in message:
-        _handle_photo(chat_id, message['photo'])
+    elif "photo" in message:
+        _handle_photo(chat_id, message["photo"], message.get("caption", ""))
 
 
 def _cmd_start(chat_id: int) -> None:
@@ -53,37 +61,42 @@ def _cmd_start(chat_id: int) -> None:
         "/events — ближайшие события\n"
         "/reminders — мои напоминания\n"
         "/delreminder <id> — удалить напоминание\n"
+        "/cancel — отменить текущее действие\n"
         "/help — помощь"
     )
 
 
 def _format_event(event) -> str:
-    """Форматирует событие для отображения."""
+    duration = int((event.end - event.start).total_seconds() / 60)
     return (
         f"📌 {event.title}\n"
-        f"📅 {event.start.strftime('%d.%m.%Y')} в {event.start.strftime('%H:%M')}"
+        f"📅 {event.start.strftime('%d.%m.%Y')} {event.start.strftime('%H:%M')}–{event.end.strftime('%H:%M')} ({duration} мин)"
     )
 
 
 def _send_pending_event(chat_id: int, event) -> None:
-    """Показывает событие и подсказку по редактированию."""
-    tg.send_message(
+    tg.send_keyboard(
         chat_id,
         _format_event(event) + "\n\n"
-        "Создать? (да / нет)\n"
+        "Создать?\n"
         "Или отредактируй:\n"
         "  название Встреча с Иваном\n"
         "  время 16:00\n"
-        "  дата 15.05"
+        "  дата 15.05\n"
+        "  длительность 2 часа",
+        [[
+            {"text": "✅ Да", "callback_data": "yes"},
+            {"text": "❌ Нет", "callback_data": "no"},
+        ]],
     )
 
 
-def _handle_photo(chat_id: int, photos: list) -> None:
+def _handle_photo(chat_id: int, photos: list, caption: str = "") -> None:
     try:
         best = max(photos, key=lambda p: p.get('file_size', 0))
         image_bytes = tg.get_file_bytes(best['file_id'])
         tg.send_message(chat_id, 'Анализирую изображение...')
-        events = extract_events_from_image(image_bytes)
+        events = extract_events_from_image(image_bytes, context=caption)
     except Exception as e:
         tg.send_message(chat_id, f'Не смог обработать фото: {e}')
         return
@@ -94,16 +107,18 @@ def _handle_photo(chat_id: int, photos: list) -> None:
     parsed = []
     failed = []
     for evt in events:
-        from datetime import datetime, timedelta
         try:
             dt = datetime.strptime(f"{evt['date']} {evt['time']}", '%Y-%m-%d %H:%M')
-            from zoneinfo import ZoneInfo
-            dt = dt.replace(tzinfo=ZoneInfo('Asia/Tashkent'))
+            dt = dt.replace(tzinfo=ZoneInfo('Asia/Seoul'))
         except Exception:
             failed.append(evt.get('title', '?'))
             continue
-        from services.parser import ParsedEvent
-        event = ParsedEvent(title=evt['title'], start=dt, end=dt + timedelta(minutes=evt.get('duration', 60)))
+        event = ParsedEvent(
+            title=evt['title'],
+            start=dt,
+            end=dt + timedelta(minutes=evt.get('duration', 60)),
+            description=evt.get('notes', ''),
+        )
         parsed.append(event)
 
     if failed:
@@ -121,8 +136,48 @@ def _show_all_pending(chat_id: int) -> None:
     lines = [f'Нашёл {len(events)} событий(я):\n']
     for i, e in enumerate(events, 1):
         lines.append(f'{i}. {e.title} — {e.start.strftime("%d.%m.%Y")} в {e.start.strftime("%H:%M")}')
-    lines.append('\nВведи номера через запятую (например: 1,3)\nили "все" чтобы создать все, "нет" чтобы отменить')
-    tg.send_message(chat_id, '\n'.join(lines))
+    num_buttons = [{"text": str(i), "callback_data": f"pick_{i}"} for i in range(1, len(events) + 1)]
+    rows = [num_buttons[i:i + 5] for i in range(0, len(num_buttons), 5)]
+    rows.append([
+        {"text": "✅ Все", "callback_data": "pick_all"},
+        {"text": "❌ Нет", "callback_data": "no"},
+    ])
+    tg.send_keyboard(chat_id, '\n'.join(lines), rows)
+
+
+def _handle_callback(cq: dict) -> None:
+    chat_id = cq["from"]["id"]
+    data = cq.get("data", "")
+    tg.answer_callback(cq["id"])
+
+    if data == "yes":
+        _confirm_event(chat_id)
+    elif data == "no":
+        _pending_events.pop(chat_id, None)
+        tg.send_message(chat_id, "Отменено.")
+    elif data == "del_yes":
+        _confirm_deletion(chat_id)
+    elif data == "del_no":
+        _pending_deletions.pop(chat_id, None)
+        tg.send_message(chat_id, "Удаление отменено.")
+    elif data == "pick_all":
+        events = _pending_events.pop(chat_id, [])
+        if events:
+            _create_events_batch(chat_id, events)
+    elif data.startswith("pick_"):
+        idx = int(data[5:])
+        events = _pending_events.get(chat_id, [])
+        if events and 1 <= idx <= len(events):
+            chosen = [events[idx - 1]]
+            _pending_events.pop(chat_id)
+            _create_events_batch(chat_id, chosen)
+
+
+def _cmd_cancel(chat_id: int) -> None:
+    had_pending = chat_id in _pending_events or chat_id in _pending_deletions
+    _pending_events.pop(chat_id, None)
+    _pending_deletions.pop(chat_id, None)
+    tg.send_message(chat_id, "Отменено." if had_pending else "Нечего отменять.")
 
 
 def _handle_voice(chat_id: int, voice: dict) -> None:
@@ -153,7 +208,6 @@ def _try_edit_event(chat_id: int, text: str) -> bool:
       дата <ДД.ММ> или <ДД.ММ.ГГГГ>
     """
     import re
-    from datetime import datetime, timedelta
 
     if not _pending_events.get(chat_id):
         return False
@@ -165,11 +219,11 @@ def _try_edit_event(chat_id: int, text: str) -> bool:
     if low.startswith("название "):
         new_title = text[len("название "):].strip()
         if new_title:
-            from services.parser import ParsedEvent
             _pending_events[chat_id][0] = ParsedEvent(
                 title=new_title,
                 start=event.start,
-                end=event.end
+                end=event.end,
+                description=event.description,
             )
             _send_pending_event(chat_id, _pending_events[chat_id][0])
             return True
@@ -179,14 +233,13 @@ def _try_edit_event(chat_id: int, text: str) -> bool:
         time_str = low[len("время "):].strip()
         m = re.match(r'^(\d{1,2}):(\d{2})$', time_str)
         if m:
-            from zoneinfo import ZoneInfo
-            from services.parser import ParsedEvent
             new_start = event.start.replace(hour=int(m.group(1)), minute=int(m.group(2)))
             duration = event.end - event.start
             _pending_events[chat_id][0] = ParsedEvent(
                 title=event.title,
                 start=new_start,
-                end=new_start + duration
+                end=new_start + duration,
+                description=event.description,
             )
             _send_pending_event(chat_id, _pending_events[chat_id][0])
             return True
@@ -194,10 +247,8 @@ def _try_edit_event(chat_id: int, text: str) -> bool:
     # Редактирование даты
     if low.startswith("дата "):
         date_str = low[len("дата "):].strip()
-        # Формат ДД.ММ или ДД.ММ.ГГГГ
         m = re.match(r'^(\d{1,2})\.(\d{2})(?:\.(\d{4}))?$', date_str)
         if m:
-            from services.parser import ParsedEvent
             day = int(m.group(1))
             month = int(m.group(2))
             year = int(m.group(3)) if m.group(3) else event.start.year
@@ -206,7 +257,24 @@ def _try_edit_event(chat_id: int, text: str) -> bool:
             _pending_events[chat_id][0] = ParsedEvent(
                 title=event.title,
                 start=new_start,
-                end=new_start + duration
+                end=new_start + duration,
+                description=event.description,
+            )
+            _send_pending_event(chat_id, _pending_events[chat_id][0])
+            return True
+
+    # Редактирование длительности
+    if low.startswith("длительность "):
+        rest = low[len("длительность "):].strip()
+        m = re.match(r'^(\d+(?:[.,]\d+)?)\s*(час|часа|часов|мин|минут|минуты?)$', rest)
+        if m:
+            val = float(m.group(1).replace(',', '.'))
+            minutes = int(val * 60) if m.group(2).startswith('час') else int(val)
+            _pending_events[chat_id][0] = ParsedEvent(
+                title=event.title,
+                start=event.start,
+                end=event.start + timedelta(minutes=minutes),
+                description=event.description,
             )
             _send_pending_event(chat_id, _pending_events[chat_id][0])
             return True
@@ -218,7 +286,7 @@ def _create_events_batch(chat_id: int, events: list) -> None:
     """Создаёт несколько событий подряд и отправляет итог."""
     tg.send_message(chat_id, f'Создаю {len(events)} событий(я)...')
     for event in events:
-        results = create_event_everywhere(event.title, event.start, event.end)
+        results = create_event_everywhere(event.title, event.start, event.end, event.description)
         lines = [f'«{event.title}»']
         for k, v in {k: v for k, v in results.items() if k != "notion"}.items():
             s = str(v)
@@ -307,7 +375,6 @@ def _process_text(chat_id: int, text: str) -> None:
         )
         return
 
-    print(f"BEFORE CREATE: start={event.start}, tzinfo={event.start.tzinfo}")
     if chat_id not in _pending_events:
         _pending_events[chat_id] = []
     _pending_events[chat_id].append(event)
@@ -356,7 +423,7 @@ def _confirm_event(chat_id: int) -> None:
     if not _pending_events[chat_id]:
         _pending_events.pop(chat_id)
     tg.send_message(chat_id, f"Создаю «{event.title}»...")
-    results = create_event_everywhere(event.title, event.start, event.end)
+    results = create_event_everywhere(event.title, event.start, event.end, event.description)
     lines = []
     for k, v in {k: v for k, v in results.items() if k != "notion"}.items():
         s = str(v)
@@ -384,11 +451,13 @@ def _cancel_event(chat_id: int, title: str) -> None:
     start = event.get("start", {}).get("dateTime") or event.get("start", {}).get("date", "")
     start_str = start[:16].replace("T", " ") if start else ""
     _pending_deletions[chat_id] = event
-    tg.send_message(
+    tg.send_keyboard(
         chat_id,
-        f"Найдено событие: «{event_title}»\n"
-        f"📅 {start_str}\n\n"
-        f"Удалить из Google Calendar? (да / нет)"
+        f"Найдено событие: «{event_title}»\n📅 {start_str}\n\nУдалить из Google Calendar?",
+        [[
+            {"text": "✅ Удалить", "callback_data": "del_yes"},
+            {"text": "❌ Нет", "callback_data": "del_no"},
+        ]],
     )
 
 

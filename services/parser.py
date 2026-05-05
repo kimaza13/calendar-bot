@@ -14,6 +14,7 @@ class ParsedEvent:
     title: str
     start: datetime
     end: datetime
+    description: str = ""
 
 
 # "7 вечера" / "8 часов вечера" → "20:00"
@@ -125,14 +126,11 @@ def parse_event(text: str) -> Optional[ParsedEvent]:
     title = re.sub(r"^(в|во|на|at|on)\s+", "", title, flags=re.IGNORECASE)
     title = " ".join(title.split()) or "Событие"
 
-    print(f"PARSER: dt_str='{dt_str}' title='{title}'", flush=True)
-
     dt = dateparser.parse(dt_str, languages=["ru", "en"], settings=_DATEPARSER_SETTINGS)
     if not dt:
         return None
 
     dt = _ensure_future(dt)
-    print(f"PARSER OUT: dt={dt} title='{title}'", flush=True)
     return ParsedEvent(title=title, start=dt, end=dt + timedelta(hours=1))
 
 

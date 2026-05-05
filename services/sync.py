@@ -3,10 +3,10 @@ from datetime import datetime
 from integrations import google_cal, apple_cal, notion_cal
 
 
-def create_event_everywhere(title: str, start: datetime, end: datetime) -> dict:
+def create_event_everywhere(title: str, start: datetime, end: datetime, description: str = "") -> dict:
     results = {}
     try:
-        results["google"] = google_cal.create_event(title, start, end)
+        results["google"] = google_cal.create_event(title, start, end, description)
     except Exception as e:
         traceback.print_exc()
         results["google"] = f"error: {e}"
