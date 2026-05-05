@@ -45,7 +45,15 @@ def _loop() -> None:
         time.sleep(_INTERVAL_SECONDS)
 
 
+def _watchdog() -> None:
+    while True:
+        t = threading.Thread(target=_loop, daemon=True, name="reminder-scheduler")
+        t.start()
+        t.join()
+        log.error("Scheduler thread exited unexpectedly, restarting in 10s...")
+        time.sleep(10)
+
+
 def start_scheduler() -> None:
-    t = threading.Thread(target=_loop, daemon=True, name="reminder-scheduler")
-    t.start()
+    threading.Thread(target=_watchdog, daemon=True, name="scheduler-watchdog").start()
     log.info("Reminder scheduler started.")

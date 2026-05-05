@@ -13,8 +13,9 @@ _PROMPT = """Ты помощник финансиста работающего �
 Для рейсов используй время вылета."""
 
 
-def extract_events_from_image(image_bytes: bytes) -> list:
+def extract_events_from_image(image_bytes: bytes, context: str = "") -> list:
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    prompt = _PROMPT + (f"\nДополнительный контекст от пользователя: {context}" if context else "")
     resp = requests.post(
         _GROQ_URL,
         headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
@@ -22,7 +23,7 @@ def extract_events_from_image(image_bytes: bytes) -> list:
             "model": "meta-llama/llama-4-scout-17b-16e-instruct",
             "messages": [
                 {"role": "user", "content": [
-                    {"type": "text", "text": _PROMPT},
+                    {"type": "text", "text": prompt},
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}
                 ]}
             ],
