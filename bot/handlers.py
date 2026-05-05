@@ -14,7 +14,6 @@ _pending_events: dict = {}
 _pending_deletions: dict = {}
 
 
-
 def handle_update(update: dict) -> None:
     message = update.get("message", {})
     if not message:
@@ -55,6 +54,27 @@ def _cmd_start(chat_id: int) -> None:
         "/reminders — мои напоминания\n"
         "/delreminder <id> — удалить напоминание\n"
         "/help — помощь"
+    )
+
+
+def _format_event(event) -> str:
+    """Форматирует событие для отображения."""
+    return (
+        f"📌 {event.title}\n"
+        f"📅 {event.start.strftime('%d.%m.%Y')} в {event.start.strftime('%H:%M')}"
+    )
+
+
+def _send_pending_event(chat_id: int, event) -> None:
+    """Показывает событие и подсказку по редактированию."""
+    tg.send_message(
+        chat_id,
+        _format_event(event) + "\n\n"
+        "Создать? (да / нет)\n"
+        "Или отредактируй:\n"
+        "  название Встреча с Иваном\n"
+        "  время 16:00\n"
+        "  дата 15.05"
     )
 
 
@@ -123,6 +143,77 @@ def _parse_numbers(text: str) -> list:
     return [int(n) for n in nums] if nums else []
 
 
+def _try_edit_event(chat_id: int, text: str) -> bool:
+    """
+    Пытается применить правку к событию в очереди.
+    Возвращает True если правка распознана, False если нет.
+    Форматы:
+      название <новое название>
+      время <ЧЧ:ММ>
+      дата <ДД.ММ> или <ДД.ММ.ГГГГ>
+    """
+    import re
+    from datetime import datetime, timedelta
+
+    if not _pending_events.get(chat_id):
+        return False
+
+    event = _pending_events[chat_id][0]
+    low = text.lower().strip()
+
+    # Редактирование названия
+    if low.startswith("название "):
+        new_title = text[len("название "):].strip()
+        if new_title:
+            from services.parser import ParsedEvent
+            _pending_events[chat_id][0] = ParsedEvent(
+                title=new_title,
+                start=event.start,
+                end=event.end
+            )
+            _send_pending_event(chat_id, _pending_events[chat_id][0])
+            return True
+
+    # Редактирование времени
+    if low.startswith("время "):
+        time_str = low[len("время "):].strip()
+        m = re.match(r'^(\d{1,2}):(\d{2})$', time_str)
+        if m:
+            from zoneinfo import ZoneInfo
+            from services.parser import ParsedEvent
+            new_start = event.start.replace(hour=int(m.group(1)), minute=int(m.group(2)))
+            duration = event.end - event.start
+            _pending_events[chat_id][0] = ParsedEvent(
+                title=event.title,
+                start=new_start,
+                end=new_start + duration
+            )
+            _send_pending_event(chat_id, _pending_events[chat_id][0])
+            return True
+
+    # Редактирование даты
+    if low.startswith("дата "):
+        date_str = low[len("дата "):].strip()
+        # Формат ДД.ММ или ДД.ММ.ГГГГ
+        m = re.match(r'^(\d{1,2})\.(\d{2})(?:\.(\d{4}))?$', date_str)
+        if m:
+            from services.parser import ParsedEvent
+            day = int(m.group(1))
+            month = int(m.group(2))
+            year = int(m.group(3)) if m.group(3) else event.start.year
+            new_start = event.start.replace(day=day, month=month, year=year)
+            duration = event.end - event.start
+            _pending_events[chat_id][0] = ParsedEvent(
+                title=event.title,
+                start=new_start,
+                end=new_start + duration
+            )
+            _send_pending_event(chat_id, _pending_events[chat_id][0])
+            return True
+
+    return False
+
+
 def _create_events_batch(chat_id: int, events: list) -> None:
     """Создаёт несколько событий подряд и отправляет итог."""
     tg.send_message(chat_id, f'Создаю {len(events)} событий(я)...')
@@ -180,7 +271,7 @@ def _process_text(chat_id: int, text: str) -> None:
                     _pending_events[chat_id] = events
                 return
 
-    # Обработка подтверждения одиночного события
+    # Обработка одиночного события (с возможностью редактирования)
     if chat_id in _pending_events and _pending_events[chat_id]:
         if low in ("да", "yes", "✅", "ок", "ok", "создать", "подтвердить"):
             _confirm_event(chat_id)
@@ -188,6 +279,9 @@ def _process_text(chat_id: int, text: str) -> None:
         elif low in ("нет", "no", "❌", "отмена", "отменить", "cancel"):
             _pending_events.pop(chat_id, None)
             tg.send_message(chat_id, "Отменено.")
+            return
+        # Пробуем применить правку
+        elif _try_edit_event(chat_id, text):
             return
 
     if "план на сегодня" in low or "план дня" in low:
@@ -217,12 +311,7 @@ def _process_text(chat_id: int, text: str) -> None:
     if chat_id not in _pending_events:
         _pending_events[chat_id] = []
     _pending_events[chat_id].append(event)
-    tg.send_message(
-        chat_id,
-        f"Распознал: «{event.title}»\n"
-        f"📅 {event.start.strftime('%d.%m.%Y')} в {event.start.strftime('%H:%M')}\n\n"
-        f"Создать событие в календаре? (да / нет)"
-    )
+    _send_pending_event(chat_id, event)
 
 
 def _add_reminder(chat_id: int, reminder) -> None:
