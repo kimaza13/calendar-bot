@@ -8,9 +8,10 @@ _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 _PROMPT = """Ты помощник финансиста работающего в Южной Корее.
 Извлеки все события с датами из изображения.
 Верни ТОЛЬКО JSON без markdown:
-{"events": [{"title": "название на русском", "date": "YYYY-MM-DD", "time": "HH:MM", "duration": 60, "notes": "заметка"}]}
+{"events": [{"title": "название на языке изображения (русский или корейский)", "date": "YYYY-MM-DD", "time": "HH:MM", "duration": 60, "notes": "заметка"}]}
 Если событий нет - верни {"events": []}.
-Для рейсов используй время вылета."""
+Для рейсов используй время вылета.
+Если текст на корейском — оставляй название на корейском."""
 
 
 def extract_events_from_image(image_bytes: bytes, context: str = "") -> list:

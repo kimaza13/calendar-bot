@@ -48,6 +48,13 @@ _MONTHS_EN = (
 )
 _WEEKDAYS_RU = r"(?:понедельник[ауе]?|вторник[ауе]?|среду?|четверг[ауе]?|пятниц[ауе]?|субботу?[ыа]?|воскресень[ею]?)"
 _WEEKDAYS_EN = r"(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)"
+_WEEKDAYS_KO = r"(?:월요일|화요일|수요일|목요일|금요일|토요일|일요일)"
+
+# Korean AM/PM: "오후 6시 30분" → "18:30"
+_KO_TIME_PATTERN = re.compile(
+    r"(오전|오후)\s+(\d{1,2})시(?:\s*(\d{1,2})분)?",
+    re.UNICODE,
+)
 
 # Tokens that represent date/time (after normalization).
 # We pass only these to dateparser, keeping the event title separate.
@@ -57,6 +64,9 @@ _DT_TOKENS = re.compile(
     r"|\bчерез\s+\d+\s+\w+"                                  # "через 2 часа"
     r"|\bпослезавтра\b|\bзавтра\b|\bсегодня\b"               # relative RU
     r"|\bday after tomorrow\b|\btomorrow\b|\btoday\b"         # relative EN
+    r"|\b내일\b|\b오늘\b|\b모레\b"                             # relative KO
+    r"|\b\d+월\s*\d+일\b"                                     # KO date: 6월 5일
+    r"|\b" + _WEEKDAYS_KO + r"\b"                             # KO weekdays
     r"|\bследующ\w+\s+(?:" + _WEEKDAYS_EN + r"|" + _WEEKDAYS_RU + r")"
     r"|\b" + _WEEKDAYS_EN + r"\b"
     r"|\b" + _WEEKDAYS_RU + r"\b",
@@ -86,6 +96,19 @@ def _normalize_time_of_day(text: str) -> str:
     return _TOD_PATTERN.sub(replace, text)
 
 
+def _normalize_korean_time(text: str) -> str:
+    def replace(m: re.Match) -> str:
+        ampm = m.group(1)
+        hour = int(m.group(2))
+        minutes = int(m.group(3)) if m.group(3) else 0
+        if ampm == "오후" and hour < 12:
+            hour += 12
+        elif ampm == "오전" and hour == 12:
+            hour = 0
+        return f"{hour:02d}:{minutes:02d}"
+    return _KO_TIME_PATTERN.sub(replace, text)
+
+
 def _normalize_month_names(text: str) -> str:
     def replace(m: re.Match) -> str:
         day = int(m.group(1))
@@ -97,21 +120,30 @@ def _normalize_month_names(text: str) -> str:
 
 
 _CANCEL_WORDS = re.compile(
-    r"^(отмени|отменить|отмена|отменяй|удали|удалить|убери|убрать|cancel|delete)\s+",
-    re.IGNORECASE,
+    r"^(отмени|отменить|отмена|отменяй|удали|удалить|убери|убрать|cancel|delete|취소|삭제|지워)\s+",
+    re.IGNORECASE | re.UNICODE,
+)
+# Korean: "미팅 취소해줘" — cancel word at the end
+_CANCEL_WORDS_KO_END = re.compile(
+    r"^(.+?)\s+(취소해줘?|삭제해줘?|취소|삭제|지워줘?)$",
+    re.UNICODE,
 )
 
 
 def parse_cancellation(text: str) -> Optional[str]:
-    """Return the event title to cancel, or None if not a cancellation request."""
-    m = _CANCEL_WORDS.match(text.strip())
-    if not m:
-        return None
-    return text.strip()[m.end():].strip() or None
+    t = text.strip()
+    m = _CANCEL_WORDS.match(t)
+    if m:
+        return t[m.end():].strip() or None
+    m = _CANCEL_WORDS_KO_END.match(t)
+    if m:
+        return m.group(1).strip() or None
+    return None
 
 
 def parse_event(text: str) -> Optional[ParsedEvent]:
     normalized = _normalize_time_of_day(text)
+    normalized = _normalize_korean_time(normalized)
     normalized = _normalize_month_names(normalized)
     normalized = re.sub(r"\s+в\s+", " ", normalized)
 
@@ -126,7 +158,7 @@ def parse_event(text: str) -> Optional[ParsedEvent]:
     title = re.sub(r"^(в|во|на|at|on)\s+", "", title, flags=re.IGNORECASE)
     title = " ".join(title.split()) or "Событие"
 
-    dt = dateparser.parse(dt_str, languages=["ru", "en"], settings=_DATEPARSER_SETTINGS)
+    dt = dateparser.parse(dt_str, languages=["ru", "en", "ko"], settings=_DATEPARSER_SETTINGS)
     if not dt:
         return None
 
