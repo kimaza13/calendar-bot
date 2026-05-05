@@ -8,7 +8,7 @@ from services.transcribe import transcribe
 from services.planner import plan_day, plan_week
 from services.vision import extract_events_from_image
 
-# Хранилище событий ожидающих подтверждения: {chat_id: ParsedEvent}
+# Хранилище событий ожидающих подтверждения: {chat_id: [ParsedEvent]}
 _pending_events: dict = {}
 # Хранилище событий ожидающих удаления: {chat_id: event_dict}
 _pending_deletions: dict = {}
@@ -38,16 +38,16 @@ def handle_update(update: dict) -> None:
             _process_text(chat_id, text)
     elif "voice" in message:
         _handle_voice(chat_id, message["voice"])
-
     elif 'photo' in message:
         _handle_photo(chat_id, message['photo'])
+
 
 def _cmd_start(chat_id: int) -> None:
     tg.send_message(chat_id,
         "Привет! Я помогу управлять твоим календарём.\n\n"
         "Напиши или надиктуй событие, например:\n"
         "  «Встреча с Алёной завтра в 15:00»\n\n"
-        "Повторяющиеся напоминания:\n"
+        "Повторяющиеющиеся напоминания:\n"
         "  «Каждый месяц 25-го платёж CJ Logistics в 14:00»\n"
         "  «Напоминай за 5 дней платёж Samsung 20-го числа»\n\n"
         "Команды:\n"
@@ -75,20 +75,29 @@ def _handle_photo(chat_id: int, photos: list) -> None:
         try:
             dt = datetime.strptime(f"{evt['date']} {evt['time']}", '%Y-%m-%d %H:%M')
             from zoneinfo import ZoneInfo
-            dt = dt.replace(tzinfo=ZoneInfo('Asia/Seoul'))
+            dt = dt.replace(tzinfo=ZoneInfo('Asia/Tashkent'))
         except Exception:
             tg.send_message(chat_id, f'Нашёл событие «{evt["title"]}», но не смог разобрать дату.')
             continue
         from services.parser import ParsedEvent
         event = ParsedEvent(title=evt['title'], start=dt, end=dt + timedelta(minutes=evt.get('duration', 60)))
-        _pending_events[chat_id] = event
-        notes = ('\n📝 ' + evt['notes']) if evt.get('notes') else ''
-        tg.send_message(
-            chat_id,
-            'Распознал: ' + event.title + '\n'
-            + event.start.strftime('%d.%m.%Y') + ' в ' + event.start.strftime('%H:%M') + notes + '\n\n'
-            + 'Создать событие в календаре? (да / нет)'
-        )
+        if chat_id not in _pending_events:
+            _pending_events[chat_id] = []
+        _pending_events[chat_id].append(event)
+    # После добавления всех событий — показываем первое
+    if _pending_events.get(chat_id):
+        _show_next_pending(chat_id)
+
+
+def _show_next_pending(chat_id: int) -> None:
+    event = _pending_events[chat_id][0]
+    tg.send_message(
+        chat_id,
+        'Распознал: ' + event.title + '\n'
+        + '📅 ' + event.start.strftime('%d.%m.%Y') + ' в ' + event.start.strftime('%H:%M') + '\n\n'
+        + 'Создать событие в календаре? (да / нет)'
+    )
+
 
 def _handle_voice(chat_id: int, voice: dict) -> None:
     try:
@@ -108,7 +117,6 @@ def _process_text(chat_id: int, text: str) -> None:
         _add_reminder(chat_id, reminder)
         return
 
-    # Проверяем — это отмена события?
     low = text.lower().strip()
 
     # Обработка подтверждения удаления
@@ -122,13 +130,17 @@ def _process_text(chat_id: int, text: str) -> None:
             return
 
     # Обработка подтверждения создания события
-    if chat_id in _pending_events:
+    if chat_id in _pending_events and _pending_events[chat_id]:
         if low in ("да", "yes", "✅", "ок", "ok", "создать", "подтвердить"):
             _confirm_event(chat_id)
             return
         elif low in ("нет", "no", "❌", "отмена", "отменить", "cancel"):
-            _pending_events.pop(chat_id, None)
-            tg.send_message(chat_id, "Отменено.")
+            _pending_events[chat_id].pop(0)
+            if _pending_events[chat_id]:
+                _show_next_pending(chat_id)
+            else:
+                _pending_events.pop(chat_id)
+                tg.send_message(chat_id, "Отменено.")
             return
 
     if "план на сегодня" in low or "план дня" in low:
@@ -155,7 +167,9 @@ def _process_text(chat_id: int, text: str) -> None:
         return
 
     print(f"BEFORE CREATE: start={event.start}, tzinfo={event.start.tzinfo}")
-    _pending_events[chat_id] = event
+    if chat_id not in _pending_events:
+        _pending_events[chat_id] = []
+    _pending_events[chat_id].append(event)
     tg.send_message(
         chat_id,
         f"Распознал: «{event.title}»\n"
@@ -185,7 +199,6 @@ def _add_reminder(chat_id: int, reminder) -> None:
         tg.send_message(chat_id, f"Ошибка при сохранении напоминания: {e}")
 
 
-
 def _confirm_deletion(chat_id: int) -> None:
     event = _pending_deletions.pop(chat_id, None)
     if event is None:
@@ -200,10 +213,12 @@ def _confirm_deletion(chat_id: int) -> None:
 
 
 def _confirm_event(chat_id: int) -> None:
-    event = _pending_events.pop(chat_id, None)
-    if event is None:
+    if not _pending_events.get(chat_id):
         tg.send_message(chat_id, "Нет события для создания.")
         return
+    event = _pending_events[chat_id].pop(0)
+    if not _pending_events[chat_id]:
+        _pending_events.pop(chat_id)
     tg.send_message(chat_id, f"Создаю «{event.title}»...")
     results = create_event_everywhere(event.title, event.start, event.end)
     lines = []
@@ -215,6 +230,10 @@ def _confirm_event(chat_id: int) -> None:
         else:
             lines.append(f"✅ {icons.get(k, k)}")
     tg.send_message(chat_id, "Готово!\n" + "\n".join(lines))
+    # Если есть ещё события в очереди — показываем следующее
+    if _pending_events.get(chat_id):
+        _show_next_pending(chat_id)
+
 
 def _cancel_event(chat_id: int, title: str) -> None:
     try:
