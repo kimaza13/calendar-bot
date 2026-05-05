@@ -279,6 +279,37 @@ def _try_edit_event(chat_id: int, text: str) -> bool:
             _send_pending_event(chat_id, _pending_events[chat_id][0])
             return True
 
+    # Голое время: "18:00" или "9:30"
+    m = re.match(r'^(\d{1,2}):(\d{2})$', low)
+    if m:
+        new_start = event.start.replace(hour=int(m.group(1)), minute=int(m.group(2)))
+        duration = event.end - event.start
+        _pending_events[chat_id][0] = ParsedEvent(
+            title=event.title,
+            start=new_start,
+            end=new_start + duration,
+            description=event.description,
+        )
+        _send_pending_event(chat_id, _pending_events[chat_id][0])
+        return True
+
+    # Голая дата: "06.05" или "06.05.2026"
+    m = re.match(r'^(\d{1,2})\.(\d{2})(?:\.(\d{4}))?$', low)
+    if m:
+        day = int(m.group(1))
+        month = int(m.group(2))
+        year = int(m.group(3)) if m.group(3) else event.start.year
+        new_start = event.start.replace(day=day, month=month, year=year)
+        duration = event.end - event.start
+        _pending_events[chat_id][0] = ParsedEvent(
+            title=event.title,
+            start=new_start,
+            end=new_start + duration,
+            description=event.description,
+        )
+        _send_pending_event(chat_id, _pending_events[chat_id][0])
+        return True
+
     return False
 
 
@@ -348,9 +379,24 @@ def _process_text(chat_id: int, text: str) -> None:
             _pending_events.pop(chat_id, None)
             tg.send_message(chat_id, "Отменено.")
             return
-        # Пробуем применить правку
         elif _try_edit_event(chat_id, text):
             return
+        # Если ввод похож на полное новое событие — заменяем pending
+        new_event = parse_event(text)
+        if new_event is not None:
+            _pending_events[chat_id][0] = new_event
+            _send_pending_event(chat_id, new_event)
+        else:
+            # Нет даты/времени — воспринимаем как новое название
+            event = _pending_events[chat_id][0]
+            _pending_events[chat_id][0] = ParsedEvent(
+                title=text.strip(),
+                start=event.start,
+                end=event.end,
+                description=event.description,
+            )
+            _send_pending_event(chat_id, _pending_events[chat_id][0])
+        return
 
     if "план на сегодня" in low or "план дня" in low:
         _cmd_plan(chat_id)
