@@ -88,10 +88,8 @@ def parse_money(text: str) -> str:
 
 # ── Форматирование итогового сообщения ──────────────────────────────────────
 def format_result(data: dict) -> str:
-    keys_emoji = "🔑" * int(data.get("keys", 1))
+    keys_val = data.get("keys", "1")
     malso_val = data.get("malso", "—")
-    if malso_val.lower() not in ("нет", "—", "no", "없음"):
-        malso_val = f"с {malso_val}"
 
     lines = [
         f"{data.get('name', '—')}",
@@ -99,7 +97,7 @@ def format_result(data: dict) -> str:
         "",
         f"{int(data.get('price',0)):,}" if data.get('price') else "—",
         "",
-        f"{keys_emoji} {data.get('keys','—')}",
+        f"🔑 {keys_val}",
         "",
         f"Состояние {data.get('condition','—')}",
         "",
