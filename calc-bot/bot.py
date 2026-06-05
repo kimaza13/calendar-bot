@@ -359,7 +359,9 @@ async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── Запуск ───────────────────────────────────────────────────────────────────
 def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    from telegram.request import HTTPXRequest
+    request = HTTPXRequest(connect_timeout=30, read_timeout=30, write_timeout=30)
+    app = Application.builder().token(TELEGRAM_TOKEN).request(request).build()
 
     conv = ConversationHandler(
         entry_points=[
