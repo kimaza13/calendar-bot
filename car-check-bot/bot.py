@@ -68,7 +68,10 @@ def fmt_money(text: str) -> str:
     return text
 
 def format_result(data: dict) -> str:
+    url = data.get("url", "")
     lines = [
+        url,
+        "",
         data.get("name", "—"),
         data.get("plate", "—"),
         "",
@@ -129,6 +132,7 @@ async def receive_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return WAITING_VOICE
 
     ctx.user_data["fields"] = data
+    data["url"] = ctx.user_data.get("url", "")
     result = format_result(data)
 
     keyboard = InlineKeyboardMarkup([[
