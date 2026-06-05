@@ -21,7 +21,6 @@ async def transcribe_voice(file_path: str) -> str:
         result = groq_client.audio.transcriptions.create(
             file=("voice.ogg", f),
             model="whisper-large-v3",
-            language="ru",
         )
     return result.text.strip()
 
