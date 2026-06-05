@@ -468,7 +468,7 @@ async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return WAITING_INPUT
 
 # ── Запуск ───────────────────────────────────────────────────────────────────
-def main():
+async def main():
     from telegram.request import HTTPXRequest
     request = HTTPXRequest(connect_timeout=30, read_timeout=30, write_timeout=30)
     app = Application.builder().token(TELEGRAM_TOKEN).request(request).build()
@@ -494,17 +494,16 @@ def main():
     )
 
     app.add_handler(conv)
-    print("📊 Calc Bot запущен")
-    app.run_polling(drop_pending_updates=True)
+
+    print("📊 Calc Bot запускается...")
+    async with app:
+        # Сначала удаляем вебхук и сбрасываем очередь
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        await app.start()
+        print("📊 Calc Bot запущен")
+        await app.updater.start_polling(drop_pending_updates=True, allowed_updates=["message", "callback_query"])
+        await app.updater.idle()
+        await app.stop()
 
 if __name__ == "__main__":
-    import time
-    while True:
-        try:
-            main()
-        except Exception as e:
-            if "Conflict" in str(e):
-                print("Conflict detected, waiting 5 seconds...")
-                time.sleep(5)
-            else:
-                raise
+    asyncio.run(main())
