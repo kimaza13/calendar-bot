@@ -498,4 +498,13 @@ def main():
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    main()
+    import time
+    while True:
+        try:
+            main()
+        except Exception as e:
+            if "Conflict" in str(e):
+                print("Conflict detected, waiting 5 seconds...")
+                time.sleep(5)
+            else:
+                raise
