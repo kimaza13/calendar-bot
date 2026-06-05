@@ -36,15 +36,16 @@ async def extract_fields(text: str) -> dict:
 Текст: "{text}"
 
 Правила:
+- price: цена в вонах только цифры без пробелов и запятых (например: "43400000"). Если не упомянута — "—"
 - keys: количество ключей (только цифра: 1 или 2)
 - condition: состояние кузова. Если "чистая" — пиши "чистая". Если есть повреждения — перечисли их (например: "чистая, царапина левое заднее крыло")
 - kesanso: кесансо/гарантия (например: "100%" или "нет")
-- medobi: медоби в вонах (только число без валюты, например: "440000"). Если не упомянуто — "нет"
+- medobi: медоби в вонах только цифры (например: "440000"). Если не упомянуто — "нет"
 - malso: мальсо (если "сразу" — пиши "сразу", если дата — формат YYYYMMDD, если нет — "нет")
 - city: город или регион
 
 Верни строго JSON:
-{{"keys": "2", "condition": "чистая", "kesanso": "100%", "medobi": "440000", "malso": "сразу", "city": "Чонджу"}}"""
+{{"price": "43400000", "keys": "2", "condition": "чистая", "kesanso": "100%", "medobi": "440000", "malso": "сразу", "city": "Чонджу"}}"""
 
     response = await asyncio.to_thread(
         groq_client.chat.completions.create,
@@ -68,11 +69,19 @@ def format_money(text: str) -> str:
     return text
 
 def format_result(name: str, plate: str, price: str, data: dict) -> str:
+    price_voice = data.get("price", "—")
+    if price_voice and price_voice != "—":
+        display_price = format_money(price_voice)
+    elif price and price != "—":
+        display_price = format_money(price)
+    else:
+        display_price = "—"
+
     lines = [
         name,
         plate,
         "",
-        price,
+        display_price,
         "",
         f"🔑 {data.get('keys', '—')}",
         "",
@@ -119,9 +128,9 @@ async def receive_car_info(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["price"] = "—"
 
     await update.message.reply_text(
-        "🎤 Теперь скажи голосовым все детали в любом порядке:\n\n"
-        "Ключи, состояние, кесансо, медоби, мальсо, город\n\n"
-        "Например: *«два ключа, чистая, царапина левое заднее крыло, кесансо сто процентов, медоби 440 тысяч, мальсо сразу, Чонджу»*",
+        "🎤 Скажи голосовым все детали в любом порядке:\n\n"
+        "Цена, ключи, состояние, кесансо, медоби, мальсо, город\n\n"
+        "Например: *«43 400 000, два ключа, чистая, царапина левое заднее крыло, кесансо сто процентов, медоби 440 тысяч, мальсо сразу, Чонджу»*",
         parse_mode="Markdown"
     )
     return WAITING_VOICE
