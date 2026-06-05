@@ -239,21 +239,47 @@ async def process_text(update, ctx, text, msg):
         return WAITING_INPUT
 
     ctx.user_data["params"] = params
-    missing = []
-    if not params.get("price_krw"): missing.append("цену авто")
-    if not params.get("engine_cc"): missing.append("объём двигателя")
-    if not params.get("engine_hp"): missing.append("мощность")
+
+    age_labels = {"new": "до 3 лет", "old": "3–5 лет", "older": "старше 5 лет"}
+    age_str = age_labels.get(params.get("age") or "", "?")
 
     summary = (
         f"Цена: ₩{int(params.get('price_krw') or 0):,}\n"
         f"Объём: {params.get('engine_cc') or '?'} см³\n"
         f"Мощность: {params.get('engine_hp') or '?'} л.с.\n"
-        f"Возраст: {{'new':'до 3 лет','old':'3–5 лет','older':'старше 5 лет'}}.get(params.get('age') or '', '?')\n"
+        f"Возраст: {age_str}\n"
     )
+
+    # Если нет объёма — спрашиваем объём кнопками
+    if not params.get("engine_cc"):
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("до 1000 см³", callback_data="cc_1000"),
+             InlineKeyboardButton("1000–1500", callback_data="cc_1500"),
+             InlineKeyboardButton("1500–2000", callback_data="cc_2000")],
+            [InlineKeyboardButton("2000–2500", callback_data="cc_2500"),
+             InlineKeyboardButton("2500–3000", callback_data="cc_3000"),
+             InlineKeyboardButton("более 3000", callback_data="cc_3500")],
+        ])
+        await msg.edit_text(f"Понял:\n{summary}\nВыбери объём двигателя:", reply_markup=keyboard)
+        return WAITING_INPUT
+
+    # Если нет мощности — спрашиваем мощность кнопками
+    if not params.get("engine_hp"):
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("до 100 л.с.", callback_data="hp_90"),
+             InlineKeyboardButton("100–130", callback_data="hp_120"),
+             InlineKeyboardButton("130–160", callback_data="hp_150")],
+            [InlineKeyboardButton("160–200", callback_data="hp_180"),
+             InlineKeyboardButton("200–250", callback_data="hp_220"),
+             InlineKeyboardButton("более 250", callback_data="hp_280")],
+        ])
+        await msg.edit_text(f"Понял:\n{summary}\nВыбери мощность:", reply_markup=keyboard)
+        return WAITING_INPUT
 
     if not params.get("age"):
         await msg.edit_text(f"Понял:\n{summary}\nВыбери возраст авто:", reply_markup=age_keyboard())
         return WAITING_INPUT
+
     if not params.get("purpose"):
         await msg.edit_text(f"Понял:\n{summary}\nДля кого ввозим?", reply_markup=purpose_keyboard())
         return WAITING_INPUT
@@ -266,7 +292,50 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
-    if data.startswith("age_"):
+    if data.startswith("cc_"):
+        cc_map = {"cc_1000": 900, "cc_1500": 1300, "cc_2000": 1800,
+                  "cc_2500": 2200, "cc_3000": 2800, "cc_3500": 3500}
+        ctx.user_data.setdefault("params", {})["engine_cc"] = str(cc_map.get(data, 1500))
+        params = ctx.user_data["params"]
+        age_str = {"new":"до 3 лет","old":"3–5 лет","older":"старше 5 лет"}.get(params.get("age",""), "?")
+        summary = (f"Цена: ₩{int(params.get('price_krw') or 0):,}\n"
+                   f"Объём: {params.get('engine_cc','?')} см³\n"
+                   f"Мощность: {params.get('engine_hp') or '?'} л.с.\n"
+                   f"Возраст: {age_str}\n")
+        if not params.get("engine_hp"):
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("до 100 л.с.", callback_data="hp_90"),
+                 InlineKeyboardButton("100–130", callback_data="hp_120"),
+                 InlineKeyboardButton("130–160", callback_data="hp_150")],
+                [InlineKeyboardButton("160–200", callback_data="hp_180"),
+                 InlineKeyboardButton("200–250", callback_data="hp_220"),
+                 InlineKeyboardButton("более 250", callback_data="hp_280")],
+            ])
+            await query.message.edit_text(f"Понял:\n{summary}\nВыбери мощность:", reply_markup=keyboard)
+            return WAITING_INPUT
+        if not params.get("age"):
+            await query.message.edit_text(f"Понял:\n{summary}\nВыбери возраст:", reply_markup=age_keyboard())
+            return WAITING_INPUT
+        await query.message.edit_text(f"Проверь параметры:\n\n{summary}", reply_markup=confirm_keyboard())
+        return CONFIRM
+
+    elif data.startswith("hp_"):
+        hp_map = {"hp_90": 85, "hp_120": 115, "hp_150": 145,
+                  "hp_180": 175, "hp_220": 210, "hp_280": 260}
+        ctx.user_data.setdefault("params", {})["engine_hp"] = str(hp_map.get(data, 136))
+        params = ctx.user_data["params"]
+        age_str = {"new":"до 3 лет","old":"3–5 лет","older":"старше 5 лет"}.get(params.get("age",""), "?")
+        summary = (f"Цена: ₩{int(params.get('price_krw') or 0):,}\n"
+                   f"Объём: {params.get('engine_cc','?')} см³\n"
+                   f"Мощность: {params.get('engine_hp','?')} л.с.\n"
+                   f"Возраст: {age_str}\n")
+        if not params.get("age"):
+            await query.message.edit_text(f"Понял:\n{summary}\nВыбери возраст:", reply_markup=age_keyboard())
+            return WAITING_INPUT
+        await query.message.edit_text(f"Проверь параметры:\n\n{summary}", reply_markup=confirm_keyboard())
+        return CONFIRM
+
+    elif data.startswith("age_"):
         ctx.user_data.setdefault("params", {})["age"] = data.replace("age_", "")
         params = ctx.user_data["params"]
         if not params.get("purpose"):
