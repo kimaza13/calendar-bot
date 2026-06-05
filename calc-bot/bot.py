@@ -172,7 +172,7 @@ def format_result(r: dict) -> str:
         f"━━━━━━━━━━━━━━━━\n"
         f"Объём: {r['cc']} см³ | Мощность: {r['hp']} л.с.\n"
         f"Возраст: {age_str} | {purpose_str}\n"
-        f"Курс: 1 ₽ = {round(1 / r['rate'], 1)} ₩\n"
+        f"Курс: 1 ₽ = {round(1 / r['rate'], 1)} ₩ | $1 = {round(1 / KRW_TO_USD):,} ₩\n"
         f"━━━━━━━━━━━━━━━━\n"
         f"Таможенная пошлина: {fmt(r['duty'])}\n"
         f"Таможенный сбор: {fmt(r['doc_fee'])}\n"
@@ -454,13 +454,8 @@ async def handle_rate_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return await receive_text(update, ctx)
 
 async def manual_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data.clear()
-    ctx.user_data["manual"] = True
-    await update.message.reply_text(
-        "Введи цену авто в вонах (только цифры):\nНапример: 39900000"
-    )
-    ctx.user_data["step"] = "price"
-    return WAITING_INPUT
+    # /manual больше не нужен — просто перенаправляем на start
+    return await start(update, ctx)
 
 async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data.clear()
