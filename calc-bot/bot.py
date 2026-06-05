@@ -61,12 +61,40 @@ async def extract_params(text: str) -> dict:
 
 # ── Расчёт ───────────────────────────────────────────────────────────────────
 KOREA_EXPENSES = 2_000_000  # KRW
-KRW_TO_RUB = 0.05347
-KRW_TO_USD = 1 / 1400
+KRW_TO_RUB = 0.05347        # fallback
+KRW_TO_USD = 1 / 1400       # fallback
 BROKER_FEES = 110_000
 SERVICE_FEE = 100_000
 CUSTOMS_DOC_FEE = 18_465
 AUTOVOZ_MSK = 210_000
+
+# Кэш курсов
+_rates_cache = {"krw_rub": KRW_TO_RUB, "krw_usd": KRW_TO_USD, "updated": 0}
+
+async def fetch_rates() -> dict:
+    """Получаем курсы KRW/RUB и KRW/USD через exchangerate-api."""
+    import time
+    import httpx
+    now = time.time()
+    if now - _rates_cache["updated"] < 3600:  # кэш 1 час
+        return _rates_cache
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get("https://open.er-api.com/v6/latest/KRW")
+            data = resp.json()
+            if data.get("result") == "success":
+                rates = data["rates"]
+                _rates_cache["krw_rub"] = rates.get("RUB", KRW_TO_RUB)
+                _rates_cache["krw_usd"] = rates.get("USD", KRW_TO_USD)
+                usd = rates.get("USD", 1)
+                rub = rates.get("RUB", 1)
+                _rates_cache["usd_rub"] = rub / usd if usd else 90
+                _rates_cache["updated"] = now
+    except Exception:
+        pass  # используем fallback
+
+    return _rates_cache
 
 def get_customs_duty(price_rub, cc, age):
     if age == "new":
@@ -121,17 +149,18 @@ def get_customs_doc_fee(price_rub):
 def fmt(n):
     return f"₽{round(n):,}".replace(",", " ")
 
-def calculate(params: dict, krw_rub: float = None) -> dict:
+def calculate(params: dict, krw_rub: float = None, krw_usd: float = None) -> dict:
     price_krw = int(params.get("price_krw") or 39_900_000)
     cc = int(params.get("engine_cc") or 1500)
     hp = int(params.get("engine_hp") or 136)
     age = params.get("age") or "old"
     purpose = params.get("purpose") or "personal"
-    rate = krw_rub or KRW_TO_RUB
+    rate = krw_rub or _rates_cache.get("krw_rub", KRW_TO_RUB)
+    usd_rate = krw_usd or _rates_cache.get("krw_usd", KRW_TO_USD)
 
     total_krw = price_krw + KOREA_EXPENSES
     price_rub = total_krw * rate
-    price_usd = total_krw * KRW_TO_USD
+    price_usd = total_krw * usd_rate
 
     duty = get_customs_duty(price_krw * rate, cc, age)
     util = get_utilsbor(cc, hp, age, purpose)
@@ -155,7 +184,7 @@ def calculate(params: dict, krw_rub: float = None) -> dict:
         "total_vlad": total_vlad,
         "total_msk": total_msk,
         "cc": cc, "hp": hp, "age": age, "purpose": purpose,
-        "rate": rate,
+        "rate": rate, "usd_rate": usd_rate,
     }
 
 def format_result(r: dict) -> str:
@@ -172,7 +201,7 @@ def format_result(r: dict) -> str:
         f"━━━━━━━━━━━━━━━━\n"
         f"Объём: {r['cc']} см³ | Мощность: {r['hp']} л.с.\n"
         f"Возраст: {age_str} | {purpose_str}\n"
-        f"Курс: 1 ₽ = {round(1 / r['rate'], 1)} ₩ | $1 = {round(1 / KRW_TO_USD):,} ₩\n"
+        f"Курс: $1 = {round(1 / r['usd_rate']):,} ₩ | $1 = {round(_rates_cache.get('usd_rub', 90))} ₽\n"
         f"━━━━━━━━━━━━━━━━\n"
         f"Таможенная пошлина: {fmt(r['duty'])}\n"
         f"Таможенный сбор: {fmt(r['doc_fee'])}\n"
@@ -358,6 +387,7 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data == "calc":
         params = ctx.user_data.get("params", {})
+        await fetch_rates()
         result = calculate(params)
         ctx.user_data["result"] = result
         text = format_result(result)
