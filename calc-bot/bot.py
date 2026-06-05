@@ -172,7 +172,7 @@ def format_result(r: dict) -> str:
         f"━━━━━━━━━━━━━━━━\n"
         f"Объём: {r['cc']} см³ | Мощность: {r['hp']} л.с.\n"
         f"Возраст: {age_str} | {purpose_str}\n"
-        f"Курс: 1₩ = {r['rate']} ₽\n"
+        f"Курс: 1 ₽ = {round(1 / r['rate'], 1)} ₩\n"
         f"━━━━━━━━━━━━━━━━\n"
         f"Таможенная пошлина: {fmt(r['duty'])}\n"
         f"Таможенный сбор: {fmt(r['doc_fee'])}\n"
@@ -370,7 +370,8 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data == "change_rate":
         await query.message.reply_text(
-            "Введи курс KRW→RUB (например: 0.0540):"
+            "Введи курс KRW→RUB (например: 0.0540)\n"
+            "или обратный — сколько вон за 1 рубль (например: 18.5):"
         )
         ctx.user_data["waiting_rate"] = True
         return WAITING_INPUT
@@ -433,7 +434,9 @@ async def handle_rate_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if ctx.user_data.get("waiting_rate"):
         try:
-            rate = float(update.message.text.strip().replace(",", "."))
+            val = float(update.message.text.strip().replace(",", "."))
+            # Если число больше 1 — значит это вон за рубль, инвертируем
+            rate = 1 / val if val > 1 else val
             ctx.user_data["waiting_rate"] = False
             params = ctx.user_data.get("params", {})
             result = calculate(params, krw_rub=rate)
