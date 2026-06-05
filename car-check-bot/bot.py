@@ -8,16 +8,12 @@ from telegram.ext import (
     CallbackQueryHandler, ConversationHandler, ContextTypes, filters
 )
 import groq
-import httpx
 
-# ── Конфиг ──────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
+groq_client    = groq.Groq(api_key=GROQ_API_KEY)
 
-groq_client = groq.Groq(api_key=GROQ_API_KEY)
-
-# ── Состояния ────────────────────────────────────────────────────────────────
-WAITING_LINK, WAITING_CAR_INFO, WAITING_VOICE, CONFIRM = range(4)
+WAITING_LINK, WAITING_VOICE, CONFIRM = range(3)
 
 # ── Транскрипция ─────────────────────────────────────────────────────────────
 async def transcribe_voice(file_path: str) -> str:
@@ -29,23 +25,25 @@ async def transcribe_voice(file_path: str) -> str:
         )
     return result.text.strip()
 
-# ── Claude извлекает поля из текста ─────────────────────────────────────────
+# ── Извлечение полей через LLM ───────────────────────────────────────────────
 async def extract_fields(text: str) -> dict:
-    prompt = f"""Из текста ниже извлеки данные об автомобиле и верни ТОЛЬКО JSON без пояснений.
+    prompt = f"""Из текста извлеки данные об автомобиле и верни ТОЛЬКО JSON.
 
 Текст: "{text}"
 
-Правила:
-- price: цена в вонах только цифры без пробелов и запятых (например: "43400000"). Если не упомянута — "—"
-- keys: количество ключей (только цифра: 1 или 2)
-- condition: состояние кузова. Если "чистая" — пиши "чистая". Если есть повреждения — перечисли их (например: "чистая, царапина левое заднее крыло")
-- kesanso: кесансо/гарантия (например: "100%" или "нет")
-- medobi: медоби в вонах только цифры (например: "440000"). Если не упомянуто — "нет"
-- malso: мальсо (если "сразу" — пиши "сразу", если дата — формат YYYYMMDD, если нет — "нет")
+Поля:
+- name: название авто (марка и модель, например "MINI COOPER COUNTRYMAN" или "MB C CLASS"). Если не упомянуто — "—"
+- plate: номерной знак авто (корейский номер, например "298보3562" или "155보7557"). Если не упомянуто — "—"
+- price: цена только цифры без пробелов (например "43400000"). Если не упомянута — "—"
+- keys: количество ключей (только цифра: "1" или "2")
+- condition: состояние. Если чистая — "чистая". Если есть повреждения — перечисли (например "чистая, царапина левое заднее крыло")
+- kesanso: кесансо (например "100%" или "нет")
+- medobi: медоби только цифры (например "440000"). Если нет — "нет"
+- malso: мальсо. Если "сразу" — пиши "сразу". Если дата (например "7 июля", "15 августа") — переведи в формат YYYYMMDD используя 2026 год (например "7 июля" → "20260707"). Если нет — "нет"
 - city: город или регион
 
-Верни строго JSON:
-{{"price": "43400000", "keys": "2", "condition": "чистая", "kesanso": "100%", "medobi": "440000", "malso": "сразу", "city": "Чонджу"}}"""
+Верни строго JSON без пояснений:
+{{"name": "MINI COOPER COUNTRYMAN", "plate": "298보3562", "price": "43400000", "keys": "2", "condition": "чистая", "kesanso": "100%", "medobi": "440000", "malso": "сразу", "city": "Чонджу"}}"""
 
     response = await asyncio.to_thread(
         groq_client.chat.completions.create,
@@ -54,34 +52,27 @@ async def extract_fields(text: str) -> dict:
         temperature=0,
     )
     raw = response.choices[0].message.content.strip()
-    # Убираем markdown если есть
     raw = re.sub(r"```json|```", "", raw).strip()
     return json.loads(raw)
 
 # ── Форматирование ───────────────────────────────────────────────────────────
-def format_money(text: str) -> str:
-    nums = re.findall(r"[\d]+", text.replace(",", ""))
+def fmt_money(text: str) -> str:
+    if not text or text == "—" or text == "нет":
+        return text
+    nums = re.findall(r"\d+", text.replace(",", "").replace(" ", ""))
     if nums:
         try:
-            return f"{int(nums[0]):,}"
+            return f"{int(''.join(nums)):,}"
         except:
             pass
     return text
 
-def format_result(name: str, plate: str, price: str, data: dict) -> str:
-    price_voice = data.get("price", "—")
-    if price_voice and price_voice != "—":
-        display_price = format_money(price_voice)
-    elif price and price != "—":
-        display_price = format_money(price)
-    else:
-        display_price = "—"
-
+def format_result(data: dict) -> str:
     lines = [
-        name,
-        plate,
+        data.get("name", "—"),
+        data.get("plate", "—"),
         "",
-        display_price,
+        fmt_money(data.get("price", "—")),
         "",
         f"🔑 {data.get('keys', '—')}",
         "",
@@ -89,7 +80,7 @@ def format_result(name: str, plate: str, price: str, data: dict) -> str:
         "",
         f"Кесансо {data.get('kesanso', '—')}",
         "",
-        f"Медоби {format_money(data.get('medobi', '—'))}",
+        f"Медоби {fmt_money(data.get('medobi', '—'))}",
         "",
         f"Мальсо {data.get('malso', '—')}",
         "",
@@ -111,32 +102,14 @@ async def receive_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data.clear()
     ctx.user_data["url"] = text
     await update.message.reply_text(
-        "Введи название и номер авто (две строки):\n\nНапример:\nMINI COOPER COUNTRYMAN\n298보3562"
-    )
-    return WAITING_CAR_INFO
-
-async def receive_car_info(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text = (update.message.text or "").strip()
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-
-    if len(lines) < 2:
-        await update.message.reply_text("Введи две строки: название и номер.")
-        return WAITING_CAR_INFO
-
-    ctx.user_data["name"] = lines[0]
-    ctx.user_data["plate"] = lines[1]
-    ctx.user_data["price"] = "—"
-
-    await update.message.reply_text(
         "🎤 Скажи голосовым все детали в любом порядке:\n\n"
-        "Цена, ключи, состояние, кесансо, медоби, мальсо, город\n\n"
-        "Например: *«43 400 000, два ключа, чистая, царапина левое заднее крыло, кесансо сто процентов, медоби 440 тысяч, мальсо сразу, Чонджу»*",
+        "Название, номер, цена, ключи, состояние, кесансо, медоби, мальсо, город\n\n"
+        "Например: _«Мини Купер Кантримэн, 298보3562, 43 миллиона 400 тысяч, два ключа, чистая, кесансо 100%, медоби 440 тысяч, мальсо сразу, Чонджу»_",
         parse_mode="Markdown"
     )
     return WAITING_VOICE
 
-async def receive_voice_details(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    # Принимаем и голос и текст
+async def receive_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.message.voice:
         file = await update.message.voice.get_file()
         path = f"/tmp/voice_{update.message.message_id}.ogg"
@@ -144,31 +117,26 @@ async def receive_voice_details(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         msg = await update.message.reply_text("⏳ Распознаю...")
         text = await transcribe_voice(path)
         os.remove(path)
-        await msg.edit_text(f"🗣 Распознал: _{text}_\n\n⏳ Разбираю поля...", parse_mode="Markdown")
+        await msg.edit_text(f"🗣 _{text}_\n\n⏳ Разбираю...", parse_mode="Markdown")
     else:
         text = update.message.text or ""
-        msg = await update.message.reply_text("⏳ Разбираю поля...")
+        msg = await update.message.reply_text("⏳ Разбираю...")
 
     try:
         data = await extract_fields(text)
     except Exception as e:
-        await msg.edit_text(f"❌ Не смог разобрать текст. Попробуй ещё раз.\n\nОшибка: {e}")
+        await msg.edit_text(f"❌ Не смог разобрать. Попробуй ещё раз.\n\n{e}")
         return WAITING_VOICE
 
     ctx.user_data["fields"] = data
+    result = format_result(data)
 
-    name = ctx.user_data.get("name", "—")
-    plate = ctx.user_data.get("plate", "—")
-    price = ctx.user_data.get("price", "—")
-    result = format_result(name, plate, price, data)
-
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Отправить", callback_data="send"),
-         InlineKeyboardButton("🔄 Заново", callback_data="restart"),
-         InlineKeyboardButton("✏️ Цена", callback_data="edit_price")]
-    ])
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Отправить", callback_data="send"),
+        InlineKeyboardButton("🔄 Заново", callback_data="restart"),
+    ]])
     await msg.edit_text(
-        f"Вот что получилось:\n\n```\n{result}\n```",
+        f"```\n{result}\n```",
         parse_mode="Markdown",
         reply_markup=keyboard,
     )
@@ -179,49 +147,16 @@ async def confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     if query.data == "send":
-        name = ctx.user_data.get("name", "—")
-        plate = ctx.user_data.get("plate", "—")
-        price = ctx.user_data.get("price", "—")
-        data = ctx.user_data.get("fields", {})
-        result = format_result(name, plate, price, data)
+        result = format_result(ctx.user_data.get("fields", {}))
         await query.message.reply_text(result)
-        await query.message.reply_text("✅ Готово! Отправь новую ссылку.")
         ctx.user_data.clear()
+        await query.message.reply_text("✅ Готово! Отправь новую ссылку.")
         return WAITING_LINK
 
     elif query.data == "restart":
         ctx.user_data.clear()
-        await query.message.reply_text("Окей, начнём заново. Отправь ссылку на Энкар.")
+        await query.message.reply_text("Отправь ссылку на Энкар.")
         return WAITING_LINK
-
-    elif query.data == "edit_price":
-        await query.message.reply_text("Введи цену:")
-        ctx.user_data["editing_price"] = True
-        return CONFIRM
-
-async def edit_price_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if ctx.user_data.get("editing_price"):
-        ctx.user_data["price"] = update.message.text.strip()
-        ctx.user_data["editing_price"] = False
-
-        name = ctx.user_data.get("name", "—")
-        plate = ctx.user_data.get("plate", "—")
-        price = ctx.user_data.get("price", "—")
-        data = ctx.user_data.get("fields", {})
-        result = format_result(name, plate, price, data)
-
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Отправить", callback_data="send"),
-             InlineKeyboardButton("🔄 Заново", callback_data="restart"),
-             InlineKeyboardButton("✏️ Цена", callback_data="edit_price")]
-        ])
-        await update.message.reply_text(
-            f"Вот что получилось:\n\n```\n{result}\n```",
-            parse_mode="Markdown",
-            reply_markup=keyboard,
-        )
-        return CONFIRM
-    return CONFIRM
 
 async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data.clear()
@@ -238,16 +173,12 @@ def main():
             MessageHandler(filters.TEXT & filters.Regex(r"encar\.com"), receive_link),
         ],
         states={
-            WAITING_LINK:    [MessageHandler(filters.TEXT, receive_link)],
-            WAITING_CAR_INFO:[MessageHandler(filters.TEXT, receive_car_info)],
-            WAITING_VOICE:   [
-                MessageHandler(filters.VOICE, receive_voice_details),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_voice_details),
+            WAITING_LINK:  [MessageHandler(filters.TEXT, receive_link)],
+            WAITING_VOICE: [
+                MessageHandler(filters.VOICE, receive_voice),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_voice),
             ],
-            CONFIRM: [
-                CallbackQueryHandler(confirm_callback),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_price_handler),
-            ],
+            CONFIRM: [CallbackQueryHandler(confirm_callback)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_user=True,
