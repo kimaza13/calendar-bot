@@ -15,6 +15,20 @@ groq_client    = groq.Groq(api_key=GROQ_API_KEY)
 
 WAITING_LINK, WAITING_VOICE, CONFIRM = range(3)
 
+MALSO_PROMPT = """- malso: мальсо/말소. Варианты:
+  * Готово прямо сейчас / "сразу" / "сейчас" → "сразу"
+  * "завтра" → "завтра"
+  * "послезавтра" → "послезавтра"  
+  * "через несколько дней" / "через пару дней" / "через 3-5 дней" → "через несколько дней"
+  * Конкретная дата ("7 июля", "15 августа", "25-го") → переведи в формат YYYYMMDD с годом 2026 (например "7 июля" → "20260707")
+  * Нет информации → "—" """
+
+PLATE_PROMPT = """- plate: номерной знак авто. Корейские номера: 3 цифры + корейский слог + 4 цифры (например "298보3562", "363소2470").
+  Whisper транскрибирует слоги как русские буквы:
+  бо/бу → 보, со/су → 소, га/ка → 가, на → 나, да/та → 다, ра/ла → 라, ма → 마,
+  па/ба → 바, са/ша → 사, а → 아, жа/ча → 자, ча/тча → 차, ка → 카, та → 타, па → 파, ха → 하
+  Восстанови правильный корейский номер. Если не упомянуто — "—" """
+
 # ── Транскрипция ─────────────────────────────────────────────────────────────
 async def transcribe_voice(file_path: str) -> str:
     with open(file_path, "rb") as f:
@@ -25,39 +39,22 @@ async def transcribe_voice(file_path: str) -> str:
         )
     return result.text.strip()
 
-# ── Извлечение полей через LLM ───────────────────────────────────────────────
+# ── Извлечение полей через LLM (голосовое от тебя) ───────────────────────────
 async def extract_fields(text: str) -> dict:
     prompt = f"""Из текста извлеки данные об автомобиле и верни ТОЛЬКО JSON.
 
 Текст: "{text}"
 
 Поля:
-- name: название авто (марка и модель, например "MINI COOPER COUNTRYMAN" или "MB C CLASS"). Если не упомянуто — "—"
-- plate: номерной знак авто. Корейские номера состоят из 3 цифр + корейский слог + 4 цифры (например "298보3562", "363소2470", "155가1234"). Whisper транскрибирует корейские слоги как русские буквы или слова:
-  * "бо/бу/во" → 보
-  * "со/су/со" → 소  
-  * "га/ка/гга" → 가
-  * "나/на/на" → 나
-  * "다/да/та" → 다
-  * "라/ра/ла" → 라
-  * "마/ма" → 마
-  * "바/па/ба" → 바
-  * "사/са/ша" → 사
-  * "아/а" → 아
-  * "자/жа/ча" → 자
-  * "차/ча/тча" → 차
-  * "카/ка" → 카
-  * "타/та" → 타
-  * "파/па" → 파
-  * "하/ха" → 하
-  Восстанови правильный корейский номер из транскрипции. Если не упомянуто — "—"
+- name: марка и модель авто (например "MINI COOPER COUNTRYMAN", "Mercedes GLE"). Если не упомянуто — "—"
+{PLATE_PROMPT}
 - price: цена только цифры без пробелов (например "43400000"). Если не упомянута — "—"
-- keys: количество ключей (только цифра: "1" или "2")
-- condition: состояние. Если чистая — "чистая". Если есть повреждения — перечисли (например "чистая, царапина левое заднее крыло")
-- kesanso: кесансо (например "100%" или "нет")
-- medobi: медоби только цифры (например "440000"). Если нет — "нет"
-- malso: мальсо. Если "сразу" — пиши "сразу". Если дата (например "7 июля", "15 августа") — переведи в формат YYYYMMDD используя 2026 год (например "7 июля" → "20260707"). Если нет — "нет"
-- city: город или регион
+- keys: количество ключей (только цифра: "1" или "2"). Если не упомянуто — "—"
+- condition: состояние. Если чистая — "чистая". Если есть повреждения — перечисли (например "царапина левое заднее крыло"). Если не упомянуто — "—"
+- kesanso: кесансо (например "100%" или "нет"). Если не упомянуто — "—"
+- medobi: медоби только цифры (например "440000"). Если нет или не упомянуто — "нет"
+{MALSO_PROMPT}
+- city: город или регион (например "Чонджу", "Сеул", "Пусан"). Если не упомянуто — "—"
 
 Верни строго JSON без пояснений:
 {{"name": "MINI COOPER COUNTRYMAN", "plate": "298보3562", "price": "43400000", "keys": "2", "condition": "чистая", "kesanso": "100%", "medobi": "440000", "malso": "сразу", "city": "Чонджу"}}"""
@@ -72,9 +69,39 @@ async def extract_fields(text: str) -> dict:
     raw = re.sub(r"```json|```", "", raw).strip()
     return json.loads(raw)
 
+# ── Извлечение полей из записи звонка ────────────────────────────────────────
+async def extract_fields_from_call(transcript: str) -> dict:
+    prompt = f"""Это транскрипция телефонного разговора с корейским автодилером. Извлеки данные и верни ТОЛЬКО JSON.
+
+Транскрипция: "{transcript}"
+
+Поля:
+- name: марка и модель авто. Если не упомянуто — "—"
+{PLATE_PROMPT}
+- price: цена в вонах только цифры. Если не упомянута — "—"
+- keys: количество ключей (цифра "1" или "2"). Ищи фразы типа "열쇠", "키", "ключ". Если не упомянуто — "—"
+- condition: состояние кузова. Если чистая/깨끗 — "чистая". Если есть повреждения — перечисли на русском. Если не упомянуто — "—"
+- kesanso: кесансо/계산서. Если 100% — "100%". Если нет — "нет". Если не упомянуто — "—"
+- medobi: медоби/매도비 в вонах только цифры. Если нет — "нет"
+{MALSO_PROMPT}
+- city: город или регион дилера. Если не упомянуто — "—"
+
+Верни строго JSON:
+{{"name": "Mercedes GLE", "plate": "363소2470", "price": "96500000", "keys": "2", "condition": "чистая", "kesanso": "100%", "medobi": "440000", "malso": "сразу", "city": "Сувон"}}"""
+
+    response = await asyncio.to_thread(
+        groq_client.chat.completions.create,
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+    )
+    raw = response.choices[0].message.content.strip()
+    raw = re.sub(r"```json|```", "", raw).strip()
+    return json.loads(raw)
+
 # ── Форматирование ───────────────────────────────────────────────────────────
 def fmt_money(text: str) -> str:
-    if not text or text == "—" or text == "нет":
+    if not text or text in ("—", "нет"):
         return text
     nums = re.findall(r"\d+", text.replace(",", "").replace(" ", ""))
     if nums:
@@ -82,6 +109,15 @@ def fmt_money(text: str) -> str:
             return f"{int(''.join(nums)):,}"
         except:
             pass
+    return text
+
+def fmt_malso(text: str) -> str:
+    """Форматирует мальсо: дату YYYYMMDD → читаемый вид."""
+    if not text or text == "—":
+        return "—"
+    if re.match(r"^\d{8}$", text):
+        # 20260707 → 07.07.2026
+        return f"{text[6:8]}.{text[4:6]}.{text[0:4]}"
     return text
 
 def format_result(data: dict) -> str:
@@ -96,15 +132,15 @@ def format_result(data: dict) -> str:
         "",
         f"🔑 {data.get('keys', '—')}",
         "",
-        f"Состояние {data.get('condition', '—')}",
+        f"Состояние: {data.get('condition', '—')}",
         "",
-        f"Кесансо {data.get('kesanso', '—')}",
+        f"Кесансо: {data.get('kesanso', '—')}",
         "",
-        f"Медоби {fmt_money(data.get('medobi', '—'))}",
+        f"Медоби: {fmt_money(data.get('medobi', '—'))}",
         "",
-        f"Мальсо {data.get('malso', '—')}",
+        f"Мальсо: {fmt_malso(data.get('malso', '—'))}",
         "",
-        data.get("city", "—"),
+        f"📍 {data.get('city', '—')}",
     ]
     return "\n".join(lines)
 
@@ -123,14 +159,11 @@ async def receive_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["url"] = text
     await update.message.reply_text(
         "🎤 Отправь голосовое или запись звонка (m4a/mp3):\n\n"
-        "Название, номер, цена, ключи, состояние, кесансо, медоби, мальсо, город\n\n"
-        "Или просто прикрепи запись телефонного разговора с дилером — разберу сам.",
-        parse_mode="Markdown"
+        "Марка, номер, цена, ключи, состояние, кесансо, медоби, мальсо, город"
     )
     return WAITING_VOICE
 
 async def receive_audio_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Обработка аудиофайлов (m4a, mp3 и т.д.)"""
     audio = update.message.audio or update.message.document
     file = await audio.get_file()
     ext = "m4a" if (update.message.audio or (update.message.document and "m4a" in (update.message.document.file_name or ""))) else "mp3"
@@ -143,7 +176,7 @@ async def receive_audio_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             result = groq_client.audio.transcriptions.create(
                 file=(f"audio.{ext}", f),
                 model="whisper-large-v3",
-                language="ko",  # корейский для звонков с дилерами
+                language="ko",
             )
         transcript = result.text.strip()
         os.remove(path)
@@ -151,7 +184,7 @@ async def receive_audio_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ Не смог транскрибировать файл.\n\n{e}")
         return WAITING_VOICE
 
-    await msg.edit_text(f"🗣 Транскрипция готова.\n⏳ Разбираю данные...")
+    await msg.edit_text("🗣 Транскрипция готова.\n⏳ Разбираю данные...")
 
     try:
         data = await extract_fields_from_call(transcript)
@@ -159,8 +192,8 @@ async def receive_audio_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ Не смог разобрать. Попробуй ещё раз.\n\n{e}")
         return WAITING_VOICE
 
-    ctx.user_data["fields"] = data
     data["url"] = ctx.user_data.get("url", "")
+    ctx.user_data["fields"] = data
     result_text = format_result(data)
 
     keyboard = InlineKeyboardMarkup([[
@@ -173,36 +206,6 @@ async def receive_audio_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         reply_markup=keyboard,
     )
     return CONFIRM
-
-async def extract_fields_from_call(transcript: str) -> dict:
-    """Извлекает данные из транскрипции телефонного разговора."""
-    prompt = f"""Это транскрипция телефонного разговора с корейским автодилером. Извлеки данные и верни ТОЛЬКО JSON.
-
-Транскрипция: "{transcript}"
-
-Поля:
-- name: название авто (марка и модель). Если не упомянуто — "—"
-- plate: корейский номерной знак. Корейские номера: 3 цифры + слог + 4 цифры (например "363소2470"). Whisper может транскрибировать слоги как: бо→보, со→소, га→가, на→나, да→다 и т.д. Восстанови правильный номер. Если не упомянуто — "—"
-- price: цена в вонах только цифры. Если не упомянута — "—"
-- keys: количество ключей (цифра "1" или "2"). Ищи фразы типа "열쇠", "키", "ключ"
-- condition: состояние кузова. Если чистая/чистое/깨끗 — "чистая". Если есть повреждения — перечисли на русском
-- kesanso: кесансо/계산서. Если 100% — "100%". Если нет — "нет"
-- medobi: медоби/매도비 в вонах только цифры (например "440000"). Если нет — "нет"
-- malso: мальсо/말소. Если готово/사용 — "сразу". Если не готово/дата — "не готово". Если нет — "нет"
-- city: город или регион дилера
-
-Верни строго JSON:
-{{"name": "Mercedes GLE", "plate": "363소2470", "price": "96500000", "keys": "2", "condition": "чистая", "kesanso": "100%", "medobi": "440000", "malso": "сразу", "city": "Сувон"}}"""
-
-    response = await asyncio.to_thread(
-        groq_client.chat.completions.create,
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-    )
-    raw = response.choices[0].message.content.strip()
-    raw = re.sub(r"```json|```", "", raw).strip()
-    return json.loads(raw)
 
 async def receive_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.message.voice:
@@ -223,8 +226,8 @@ async def receive_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ Не смог разобрать. Попробуй ещё раз.\n\n{e}")
         return WAITING_VOICE
 
-    ctx.user_data["fields"] = data
     data["url"] = ctx.user_data.get("url", "")
+    ctx.user_data["fields"] = data
     result = format_result(data)
 
     keyboard = InlineKeyboardMarkup([[
