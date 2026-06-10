@@ -197,13 +197,13 @@ def format_result(data: dict) -> str:
 
 # ── Хэндлеры ────────────────────────────────────────────────────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Отправь ссылку на Энкар.")
+    await update.message.reply_text("👋 Отправь ссылку на авто.")
     return WAITING_LINK
 
 async def receive_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
-    if "encar.com" not in text:
-        await update.message.reply_text("Не вижу ссылку на Энкар. Попробуй ещё раз.")
+    if "http" not in text:
+        await update.message.reply_text("Не вижу ссылку. Попробуй ещё раз.")
         return WAITING_LINK
 
     ctx.user_data.clear()
@@ -305,7 +305,7 @@ async def confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "restart":
         ctx.user_data.clear()
-        await query.message.reply_text("Отправь ссылку на Энкар.")
+        await query.message.reply_text("Отправь ссылку на авто.")
         return WAITING_LINK
 
 async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -320,7 +320,7 @@ def main():
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
-            MessageHandler(filters.TEXT & filters.Regex(r"encar\.com"), receive_link),
+            MessageHandler(filters.TEXT & filters.Regex(r"http"), receive_link),
         ],
         states={
             WAITING_LINK:  [MessageHandler(filters.TEXT, receive_link)],
