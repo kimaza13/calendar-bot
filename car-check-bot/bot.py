@@ -171,13 +171,27 @@ def fmt_malso(text: str) -> str:
         return f"{text[6:8]}.{text[4:6]}.{text[0:4]}"
     return text
 
+def get_last4(plate: str) -> str:
+    """Извлекает последние 4 цифры номера."""
+    if not plate or plate == "—":
+        return ""
+    digits = re.findall(r"\d+", plate)
+    if len(digits) >= 2:
+        return digits[-1][-4:]
+    return ""
+
 def format_result(data: dict) -> str:
     url = data.get("url", "")
+    name = data.get("name", "—")
+    plate = data.get("plate", "—")
+    last4 = get_last4(plate)
+    name_with_plate = f"{name} {last4}".strip() if last4 else name
+
     lines = [
         url,
         "",
-        data.get("name", "—"),
-        data.get("plate", "—"),
+        name_with_plate,
+        plate,
         "",
         fmt_money(data.get("price", "—")),
         "",
