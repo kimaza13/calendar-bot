@@ -206,6 +206,8 @@ def format_result(data: dict) -> str:
         f"Мальсо: {fmt_malso(data.get('malso', '—'))}",
         "",
         f"📍 {data.get('city', '—')}",
+        "",
+        "⚠️ Перед осмотром обязательно связаться с дилером",
     ]
     return "\n".join(lines)
 
