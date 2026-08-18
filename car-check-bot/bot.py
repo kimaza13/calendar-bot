@@ -2,6 +2,7 @@ import os
 import re
 import json
 import asyncio
+import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -11,6 +12,7 @@ import groq
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
+ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 groq_client    = groq.Groq(api_key=GROQ_API_KEY)
 
 WAITING_LINK, WAITING_VOICE, CONFIRM = range(3)
@@ -95,9 +97,33 @@ async def transcribe_voice(file_path: str) -> str:
         )
     return result.text.strip()
 
-# ── Извлечение полей через LLM (голосовое от тебя) ───────────────────────────
+# ── Извлечение полей через Claude API ────────────────────────────────────────
+async def ask_claude(prompt: str) -> dict:
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 500,
+                "system": "Ты помощник который извлекает данные из текста и возвращает ТОЛЬКО валидный JSON без пояснений и markdown.",
+                "messages": [{"role": "user", "content": prompt}],
+            },
+        )
+        data = resp.json()
+        raw = data["content"][0]["text"].strip()
+        raw = re.sub(r"```json|```", "", raw).strip()
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if match:
+            raw = match.group(0)
+        return json.loads(raw)
+
 async def extract_fields(text: str) -> dict:
-    prompt = f"""Из текста извлеки данные об автомобиле и верни ТОЛЬКО JSON без каких-либо пояснений.
+    prompt = f"""Из текста извлеки данные об автомобиле и верни ТОЛЬКО JSON.
 
 Текст: "{text}"
 
@@ -112,31 +138,10 @@ async def extract_fields(text: str) -> dict:
 {MALSO_PROMPT}
 {CITY_PROMPT}
 
-Верни строго JSON без пояснений, без markdown, без тегов think:
+Верни строго JSON:
 {{"name": "BMW X5", "plate": "56무2942", "price": "55000000", "keys": "2", "condition": "чистая", "kesanso": "100%", "medobi": "330000", "malso": "сразу", "city": "Ансан"}}"""
+    return await ask_claude(prompt)
 
-    response = await asyncio.to_thread(
-        groq_client.chat.completions.create,
-        model="openai/gpt-oss-20b",
-
-        messages=[
-            {"role": "system", "content": "Ты помощник который извлекает данные и возвращает ТОЛЬКО валидный JSON без каких-либо пояснений, тегов think или markdown."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0,
-        max_tokens=500,
-    )
-    raw = response.choices[0].message.content.strip()
-    # Убираем теги <think>...</think> если есть
-    raw = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
-    raw = re.sub(r"```json|```", "", raw).strip()
-    # Берём только JSON часть
-    match = re.search(r'\{.*\}', raw, re.DOTALL)
-    if match:
-        raw = match.group(0)
-    return json.loads(raw)
-
-# ── Извлечение полей из записи звонка ────────────────────────────────────────
 async def extract_fields_from_call(transcript: str) -> dict:
     prompt = f"""Это транскрипция телефонного разговора с корейским автодилером. Извлеки данные и верни ТОЛЬКО JSON.
 
@@ -153,27 +158,9 @@ async def extract_fields_from_call(transcript: str) -> dict:
 {MALSO_PROMPT}
 {CITY_PROMPT}
 
-Верни строго JSON без пояснений, без markdown, без тегов think:
+Верни строго JSON:
 {{"name": "Mercedes GLE", "plate": "363소2470", "price": "96500000", "keys": "2", "condition": "перекрас, замена переднего крыла — надо смотреть", "kesanso": "100%", "medobi": "440000", "malso": "сразу", "city": "Сувон"}}"""
-
-    response = await asyncio.to_thread(
-        groq_client.chat.completions.create,
-        model="openai/gpt-oss-20b",
-
-        messages=[
-            {"role": "system", "content": "Ты помощник который извлекает данные и возвращает ТОЛЬКО валидный JSON без каких-либо пояснений, тегов think или markdown."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0,
-        max_tokens=500,
-    )
-    raw = response.choices[0].message.content.strip()
-    raw = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
-    raw = re.sub(r"```json|```", "", raw).strip()
-    match = re.search(r'\{.*\}', raw, re.DOTALL)
-    if match:
-        raw = match.group(0)
-    return json.loads(raw)
+    return await ask_claude(prompt)
 
 # ── Форматирование ───────────────────────────────────────────────────────────
 def fmt_money(text: str) -> str:
