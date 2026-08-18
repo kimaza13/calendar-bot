@@ -114,7 +114,7 @@ async def extract_fields(text: str) -> dict:
 
     response = await asyncio.to_thread(
         groq_client.chat.completions.create,
-        model="llama-3.1-70b-versatile",
+        model="qwen/qwen3.6-27b",
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
     )
@@ -144,7 +144,7 @@ async def extract_fields_from_call(transcript: str) -> dict:
 
     response = await asyncio.to_thread(
         groq_client.chat.completions.create,
-        model="llama-3.1-70b-versatile",
+        model="qwen/qwen3.6-27b",
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
     )
