@@ -20,6 +20,8 @@ MALSO_PROMPT = """- malso: мальсо/말소. Варианты:
   * "завтра" → "завтра"
   * "послезавтра" → "послезавтра"
   * "через несколько дней" / "через пару дней" / "через 3-5 дней" → "через несколько дней"
+  * "1-2 недели" / "через неделю" / "через две недели" / "일이주" / "1~2주" → "1-2 недели"
+  * "через месяц" / "한달" → "через месяц"
   * Конкретная дата ("7 июля", "15 августа", "25-го") → переведи в формат YYYYMMDD с годом 2026 (например "7 июля" → "20260707")
   * Нет информации → "—" """
 
@@ -44,7 +46,8 @@ CITY_PROMPT = """- city: город или регион. Переведи на �
   창원=Чханвон, 고양=Коян, 안산=Ансан, 안양=Анян, 남양주=Намянджу, 화성=Хвасон,
   평택=Пхёнтхэк, 의정부=Ыйджонбу, 시흥=Сихын, 파주=Паджу, 김포=Кимпхо,
   광명=Кванмён, 경기=Кёнги, 경남=Кённам, 경북=Кёнбук, 충남=Чхунчхам, 충북=Чхунбук,
-  전남=Чоннам, 전북=Чонбук, 강원=Канвон, 제주=Чеджу
+  전남=Чоннам, 전북=Чонбук, 강원=Канвон, 제주=Чеджу, 구리=Гури, 하남=Хасон,
+  오산=Осан, 군포=Кунпхо, 의왕=Ыйван, 양주=Янджу, 동두천=Тондучхон
   Если корейское название не в списке — транслитерируй на русский. Если не упомянуто — "—" """
 
 PRICE_PROMPT = """- price: цена авто в вонах, ТОЛЬКО цифры без пробелов и запятых.
@@ -94,7 +97,7 @@ async def transcribe_voice(file_path: str) -> str:
 
 # ── Извлечение полей через LLM (голосовое от тебя) ───────────────────────────
 async def extract_fields(text: str) -> dict:
-    prompt = f"""Из текста извлеки данные об автомобиле и верни ТОЛЬКО JSON.
+    prompt = f"""Из текста извлеки данные об автомобиле и верни ТОЛЬКО JSON без каких-либо пояснений.
 
 Текст: "{text}"
 
@@ -109,17 +112,27 @@ async def extract_fields(text: str) -> dict:
 {MALSO_PROMPT}
 {CITY_PROMPT}
 
-Верни строго JSON без пояснений:
+Верни строго JSON без пояснений, без markdown, без тегов think:
 {{"name": "BMW X5", "plate": "56무2942", "price": "55000000", "keys": "2", "condition": "чистая", "kesanso": "100%", "medobi": "330000", "malso": "сразу", "city": "Ансан"}}"""
 
     response = await asyncio.to_thread(
         groq_client.chat.completions.create,
         model="qwen/qwen3.6-27b",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[
+            {"role": "system", "content": "Ты помощник который извлекает данные и возвращает ТОЛЬКО валидный JSON без каких-либо пояснений, тегов think или markdown."},
+            {"role": "user", "content": prompt}
+        ],
         temperature=0,
+        max_tokens=500,
     )
     raw = response.choices[0].message.content.strip()
+    # Убираем теги <think>...</think> если есть
+    raw = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
     raw = re.sub(r"```json|```", "", raw).strip()
+    # Берём только JSON часть
+    match = re.search(r'\{.*\}', raw, re.DOTALL)
+    if match:
+        raw = match.group(0)
     return json.loads(raw)
 
 # ── Извлечение полей из записи звонка ────────────────────────────────────────
@@ -139,17 +152,25 @@ async def extract_fields_from_call(transcript: str) -> dict:
 {MALSO_PROMPT}
 {CITY_PROMPT}
 
-Верни строго JSON:
+Верни строго JSON без пояснений, без markdown, без тегов think:
 {{"name": "Mercedes GLE", "plate": "363소2470", "price": "96500000", "keys": "2", "condition": "перекрас, замена переднего крыла — надо смотреть", "kesanso": "100%", "medobi": "440000", "malso": "сразу", "city": "Сувон"}}"""
 
     response = await asyncio.to_thread(
         groq_client.chat.completions.create,
         model="qwen/qwen3.6-27b",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[
+            {"role": "system", "content": "Ты помощник который извлекает данные и возвращает ТОЛЬКО валидный JSON без каких-либо пояснений, тегов think или markdown."},
+            {"role": "user", "content": prompt}
+        ],
         temperature=0,
+        max_tokens=500,
     )
     raw = response.choices[0].message.content.strip()
+    raw = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
     raw = re.sub(r"```json|```", "", raw).strip()
+    match = re.search(r'\{.*\}', raw, re.DOTALL)
+    if match:
+        raw = match.group(0)
     return json.loads(raw)
 
 # ── Форматирование ───────────────────────────────────────────────────────────
@@ -172,7 +193,6 @@ def fmt_malso(text: str) -> str:
     return text
 
 def get_last4(plate: str) -> str:
-    """Извлекает последние 4 цифры номера."""
     if not plate or plate == "—":
         return ""
     digits = re.findall(r"\d+", plate)
