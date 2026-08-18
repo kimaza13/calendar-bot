@@ -117,7 +117,8 @@ async def extract_fields(text: str) -> dict:
 
     response = await asyncio.to_thread(
         groq_client.chat.completions.create,
-        model="meta-llama/llama-4-scout-17b-16e-instruct",
+        model="openai/gpt-oss-20b",
+
         messages=[
             {"role": "system", "content": "Ты помощник который извлекает данные и возвращает ТОЛЬКО валидный JSON без каких-либо пояснений, тегов think или markdown."},
             {"role": "user", "content": prompt}
@@ -157,7 +158,8 @@ async def extract_fields_from_call(transcript: str) -> dict:
 
     response = await asyncio.to_thread(
         groq_client.chat.completions.create,
-        model="qwen/qwen3.6-27b",
+        model="openai/gpt-oss-20b",
+
         messages=[
             {"role": "system", "content": "Ты помощник который извлекает данные и возвращает ТОЛЬКО валидный JSON без каких-либо пояснений, тегов think или markdown."},
             {"role": "user", "content": prompt}
