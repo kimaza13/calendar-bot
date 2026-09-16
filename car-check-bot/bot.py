@@ -159,8 +159,11 @@ async def transcribe(file_path: str, lang: str = "ru") -> str:
     return result.text.strip()
 
 # ── Форматирование ────────────────────────────────────────────────────────────
-def fmt_money(val: str) -> str:
-    if not val or val in ("—", "нет"):
+def fmt_money(val) -> str:
+    if val is None:
+        return "—"
+    val = str(val)
+    if val in ("—", "нет", ""):
         return val or "—"
     nums = re.findall(r"\d+", val.replace(",", "").replace(" ", ""))
     if nums:
@@ -555,11 +558,13 @@ async def car_fill_from_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         msg_to_edit = await update.message.reply_text("⏳ Заполняю форму...")
 
     try:
-        import asyncio
-        fields = await asyncio.to_thread(
-            lambda: groq_client.chat.completions.create(
-                model="openai/gpt-oss-20b",
-                messages=[{"role": "user", "content": f"""Из текста извлеки данные об автомобиле и верни ТОЛЬКО JSON.
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "model": "openai/gpt-oss-20b",
+                    "messages": [{"role": "user", "content": f"""Из текста извлеки данные об автомобиле и верни ТОЛЬКО JSON.
 
 Текст: "{text}"
 
@@ -575,10 +580,10 @@ async def car_fill_from_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 - city: город на русском
 
 {{"name":null,"plate":null,"price":null,"keys":null,"condition":null,"kesanso":null,"medobi":null,"malso":null,"city":null}}"""}],
-                temperature=0,
+                    "temperature": 0,
+                }
             )
-        )
-        raw = fields.choices[0].message.content.strip()
+        raw = resp.json()["choices"][0]["message"]["content"].strip()
         raw = re.sub(r"```json|```", "", raw).strip()
         parsed = json.loads(raw)
     except Exception as e:
