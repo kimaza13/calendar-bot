@@ -1,6 +1,5 @@
 import os
 import re
-import asyncio
 import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -12,7 +11,7 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
 WAITING_LINK, FILLING, WAITING_TEXT_INPUT = range(3)
 
-# ── Города ───────────────────────────────────────────────────────────────────
+# ── Города ────────────────────────────────────────────────────────────────────
 CITY_MAP = {
     "서울": "Сеул", "부산": "Пусан", "인천": "Инчхон", "대구": "Тэгу",
     "대전": "Тэджон", "광주": "Кванджу", "수원": "Сувон", "울산": "Ульсан",
@@ -20,7 +19,7 @@ CITY_MAP = {
     "고양": "Коян", "안산": "Ансан", "안양": "Анян", "남양주": "Намянджу",
     "화성": "Хвасон", "평택": "Пхёнтхэк", "의정부": "Ыйджонбу",
     "시흥": "Сихын", "파주": "Паджу", "김포": "Кимпхо", "광명": "Кванмён",
-    "경기": "Кёнги (пров.)", "경남": "Кённам", "경북": "Кёнбук",
+    "경기": "Кёнги", "경남": "Кённам", "경북": "Кёнбук",
     "충남": "Чхунчхам", "충북": "Чхунбук", "전남": "Чоннам",
     "전북": "Чонбук", "강원": "Канвон", "제주": "Чеджу",
     "구리": "Гури", "하남": "Хасон", "오산": "Осан", "청주": "Чонджу",
@@ -34,7 +33,7 @@ def translate_city(raw: str) -> str:
     for kr, ru in CITY_MAP.items():
         if kr in raw:
             return ru
-    return raw.strip() if raw.strip() else "—"
+    return raw.strip() or "—"
 
 # ── Марки/модели ──────────────────────────────────────────────────────────────
 BRAND_MAP = {
@@ -145,83 +144,83 @@ def format_result(d: dict) -> str:
     ])
 
 # ── Форма ─────────────────────────────────────────────────────────────────────
-def v(d, key):
-    """Значение поля или прочерк."""
-    val = d.get(key)
-    return val if val else "—"
+def val(d, key, fmt=False):
+    v = d.get(key)
+    if not v:
+        return "—"
+    return fmt_money(v) if fmt else v
 
-def chk(d, key, val):
-    return " ✅" if d.get(key) == val else ""
+def dot(d, key, target):
+    """Галочка если выбрано."""
+    return " ✅" if d.get(key) == target else ""
 
 def build_form(d: dict):
-    """Возвращает (text, keyboard)."""
+    name  = val(d, "name")
+    plate = val(d, "plate")
+    price = val(d, "price", fmt=True)
+    keys  = val(d, "keys")
+    cond  = val(d, "condition")
+    kes   = val(d, "kesanso", fmt=True)
+    med   = val(d, "medobi", fmt=True)
+    mal   = val(d, "malso")
+    city  = val(d, "city")
 
-    name  = v(d, "name")
-    plate = v(d, "plate")
-    price = v(d, "price")
-    keys  = v(d, "keys")
-    cond  = v(d, "condition")
-    kes   = fmt_money(v(d, "kesanso"))
-    med   = fmt_money(v(d, "medobi"))
-    mal   = v(d, "malso")
-    city  = v(d, "city")
-
-    text = "\n".join([
-        f"🚗 Марка и модель: *{name}*",
-        f"🔢 Номер: `{plate}`",
-        f"💵 Цена: `{fmt_money(price) if price != '—' else '—'}`",
-        f"🔑 Ключи: {keys}",
-        f"🚘 Состояние: {cond}",
-        f"📋 Кесансо: {kes}",
-        f"💰 Медоби: {med}",
-        f"📅 Мальсо: {mal}",
-        f"📍 Город: {city}",
-    ])
+    text = (
+        f"🚗 *Марка и модель:* {name}\n"
+        f"🔢 *Номер:* `{plate}`\n"
+        f"💵 *Цена:* `{price}`\n"
+        f"🔑 *Ключи:* {keys}\n"
+        f"🚘 *Состояние:* {cond}\n"
+        f"📋 *Кесансо:* {kes}\n"
+        f"💰 *Медоби:* {med}\n"
+        f"📅 *Мальсо:* {mal}\n"
+        f"📍 *Город:* {city}"
+    )
 
     rows = [
         # Марка
-        [InlineKeyboardButton("✏️ Марка и модель", callback_data="edit_name")],
+        [InlineKeyboardButton(f"🚗 Марка и модель{' ✅' if d.get('name') and d.get('name') != '—' else ' ✏️'}", callback_data="edit_name")],
         # Номер
-        [InlineKeyboardButton("✏️ Номер авто", callback_data="edit_plate")],
+        [InlineKeyboardButton(f"🔢 Номер авто{' ✅' if d.get('plate') else ' ✏️'}", callback_data="edit_plate")],
         # Цена
-        [InlineKeyboardButton("✏️ Цена", callback_data="edit_price")],
+        [InlineKeyboardButton(f"💵 Цена{' ✅' if d.get('price') else ' ✏️'}", callback_data="edit_price")],
         # Ключи
         [
-            InlineKeyboardButton(f"🔑 1{chk(d,'keys','1')}", callback_data="keys_1"),
-            InlineKeyboardButton(f"🔑 2{chk(d,'keys','2')}", callback_data="keys_2"),
+            InlineKeyboardButton(f"🔑 1{dot(d,'keys','1')}", callback_data="keys_1"),
+            InlineKeyboardButton(f"🔑 2{dot(d,'keys','2')}", callback_data="keys_2"),
         ],
         # Состояние
         [
-            InlineKeyboardButton(f"✅ Чистая{chk(d,'condition','чистая')}", callback_data="cond_clean"),
-            InlineKeyboardButton(f"🔍 Надо смотреть{chk(d,'condition','надо смотреть')}", callback_data="cond_check"),
+            InlineKeyboardButton(f"✅ Чистая{dot(d,'condition','чистая')}", callback_data="cond_clean"),
+            InlineKeyboardButton(f"🔍 Надо смотреть{dot(d,'condition','надо смотреть')}", callback_data="cond_check"),
         ],
         # Кесансо
         [
-            InlineKeyboardButton(f"100%{chk(d,'kesanso','100%')}", callback_data="kes_100"),
-            InlineKeyboardButton(f"Нет{chk(d,'kesanso','нет')}", callback_data="kes_no"),
+            InlineKeyboardButton(f"100%{dot(d,'kesanso','100%')}", callback_data="kes_100"),
+            InlineKeyboardButton(f"Нет{dot(d,'kesanso','нет')}", callback_data="kes_no"),
             InlineKeyboardButton("Ввести сумму", callback_data="kes_input"),
         ],
         # Медоби
         [
-            InlineKeyboardButton(f"440,000{chk(d,'medobi','440000')}", callback_data="med_440"),
-            InlineKeyboardButton(f"450,000{chk(d,'medobi','450000')}", callback_data="med_450"),
-            InlineKeyboardButton(f"330,000{chk(d,'medobi','330000')}", callback_data="med_330"),
+            InlineKeyboardButton(f"440,000{dot(d,'medobi','440000')}", callback_data="med_440"),
+            InlineKeyboardButton(f"450,000{dot(d,'medobi','450000')}", callback_data="med_450"),
+            InlineKeyboardButton(f"330,000{dot(d,'medobi','330000')}", callback_data="med_330"),
             InlineKeyboardButton("Другое", callback_data="med_input"),
         ],
         # Мальсо
         [
-            InlineKeyboardButton(f"Сразу{chk(d,'malso','сразу')}", callback_data="mal_now"),
-            InlineKeyboardButton(f"Завтра{chk(d,'malso','завтра')}", callback_data="mal_tomorrow"),
-            InlineKeyboardButton(f"1-2 нед{chk(d,'malso','1-2 недели')}", callback_data="mal_2weeks"),
+            InlineKeyboardButton(f"Сразу{dot(d,'malso','сразу')}", callback_data="mal_now"),
+            InlineKeyboardButton(f"Завтра{dot(d,'malso','завтра')}", callback_data="mal_tomorrow"),
+            InlineKeyboardButton(f"1-2 нед{dot(d,'malso','1-2 недели')}", callback_data="mal_2weeks"),
             InlineKeyboardButton("Другое", callback_data="mal_input"),
         ],
         # Город
-        [InlineKeyboardButton("✏️ Город", callback_data="edit_city")],
+        [InlineKeyboardButton(f"📍 Город{' ✅' if d.get('city') and d.get('city') != '—' else ' ✏️'}", callback_data="edit_city")],
     ]
 
-    # Отправить — только если всё заполнено
+    # Отправить — только когда всё заполнено
     required = ["name", "plate", "price", "keys", "condition", "kesanso", "medobi", "malso", "city"]
-    if all(d.get(k) for k in required):
+    if all(d.get(k) and d.get(k) != "—" for k in required):
         rows.append([InlineKeyboardButton("✅ Отправить", callback_data="send")])
 
     rows.append([InlineKeyboardButton("🔄 Заново", callback_data="restart")])
@@ -258,11 +257,9 @@ async def receive_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     car_id = match.group(1) if match else None
 
     wait_msg = await update.message.reply_text("⏳ Загружаю...")
-
     parsed = await parse_encar_api(car_id) if car_id else {}
     ctx.user_data["name"] = parsed.get("name", "—")
     ctx.user_data["city"] = parsed.get("city", "—")
-
     await wait_msg.delete()
 
     text, kb = build_form(ctx.user_data)
@@ -291,7 +288,7 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("✅ Готово! Отправь новую ссылку.")
         return WAITING_LINK
 
-    # Простые значения
+    # Простые кнопки
     simple = {
         "keys_1": ("keys", "1"),       "keys_2": ("keys", "2"),
         "cond_clean": ("condition", "чистая"),
@@ -303,8 +300,8 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "mal_2weeks": ("malso", "1-2 недели"),
     }
     if d in simple:
-        key, val = simple[d]
-        ctx.user_data[key] = val
+        key, val_s = simple[d]
+        ctx.user_data[key] = val_s
         text, kb = build_form(ctx.user_data)
         try:
             await query.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
@@ -314,7 +311,7 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Текстовый ввод
     prompts = {
-        "edit_name":  ("name_input",    "✏️ Введи *марку и модель* (например: BMW X5):"),
+        "edit_name":  ("name_input",    "✏️ Введи *марку и модель* (например: KIA K5):"),
         "edit_plate": ("plate_input",   "✏️ Введи *номер авто* (например: 256수7232):"),
         "edit_price": ("price_input",   "✏️ Введи *цену* в вонах (например: 26500000):"),
         "kes_input":  ("kesanso_input", "✏️ Введи сумму кесансо:"),
@@ -331,7 +328,7 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return FILLING
 
 async def receive_text_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    val   = (update.message.text or "").strip()
+    val_t = (update.message.text or "").strip()
     field = ctx.user_data.get("waiting_for")
 
     field_map = {
@@ -344,7 +341,7 @@ async def receive_text_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "city_input":    "city",
     }
     if field in field_map:
-        ctx.user_data[field_map[field]] = val
+        ctx.user_data[field_map[field]] = val_t
         ctx.user_data["waiting_for"] = None
         await refresh_form(ctx)
 
