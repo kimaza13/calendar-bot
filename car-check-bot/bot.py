@@ -15,194 +15,100 @@ GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 groq_client    = groq.Groq(api_key=GROQ_API_KEY)
 
-WAITING_LINK, WAITING_VOICE, CONFIRM = range(3)
+# ── Состояния разговора ───────────────────────────────────────────────────────
+(WAITING_LINK, WAITING_PLATE, WAITING_PRICE,
+ WAITING_KEYS, WAITING_CONDITION, WAITING_KESANSO,
+ WAITING_KESANSO_INPUT, WAITING_MEDOBI, WAITING_MEDOBI_INPUT,
+ WAITING_MALSO, WAITING_MALSO_INPUT, CONFIRM) = range(12)
 
-MALSO_PROMPT = """- malso: мальсо/말소. Варианты:
-  * Готово прямо сейчас / "сразу" / "сейчас" → "сразу"
-  * "завтра" → "завтра"
-  * "послезавтра" → "послезавтра"
-  * "через несколько дней" / "через пару дней" / "через 3-5 дней" → "через несколько дней"
-  * "1-2 недели" / "через неделю" / "через две недели" / "일이주" / "1~2주" → "1-2 недели"
-  * "через месяц" / "한달" → "через месяц"
-  * Конкретная дата ("7 июля", "15 августа", "25-го") → переведи в формат YYYYMMDD с годом 2026 (например "7 июля" → "20260707")
-  * Нет информации → "—" """
+# ── Парсинг Encar ─────────────────────────────────────────────────────────────
+async def parse_encar(url: str) -> dict:
+    """Парсим данные авто с Encar через API."""
+    try:
+        # Извлекаем carid из URL
+        match = re.search(r'/detail/(\d+)', url)
+        if not match:
+            return {}
+        car_id = match.group(1)
 
-PLATE_PROMPT = """- plate: номерной знак авто. Корейские номера: 3 цифры + корейский слог + 4 цифры (например "298보3562", "56무2942").
-  
-  Whisper транскрибирует номера ДВУМЯ способами — нужно уметь читать оба:
-  
-  СПОСОБ 1 — Корейские числительные (самый частый):
-  Цифры произносятся по-корейски: 영/공=0, 일=1, 이=2, 삼=3, 사=4, 오=5, 육=6, 칠=7, 팔=8, 구=9
-  Пример: "오육 무에 이구사이" → 56 + 무 + 2942 → "56무2942"
-  Пример: "이구팔 보에 삼오육이" → 298 + 보 + 3562 → "298보3562"
-  
-  СПОСОБ 2 — Слог транскрибируется как русская буква:
-  бо/бу → 보, со/су → 소, га/ка → 가, на → 나, да/та → 다, ра/ла → 라,
-  ма → 마, па/ба → 바, са/ша → 사, а → 아, жа/ча → 자, ча → 차, ха → 하
-  
-  Восстанови правильный номер в формате ЦИФРЫ+СЛОГ+ЦИФРЫ. Если не упомянуто — "—" """
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"https://api.encar.com/search/car/list/premium?count=1&q=(Id:{car_id})",
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if resp.status_code != 200:
+                return {}
+            data = resp.json()
+            cars = data.get("SearchResults", [])
+            if not cars:
+                return {}
+            car = cars[0]
 
-CITY_PROMPT = """- city: город или регион. Переведи на русский язык:
-  청주=Чонджу, 서울=Сеул, 부산=Пусан, 인천=Инчхон, 대구=Тэгу, 대전=Тэджон,
-  광주=Кванджу, 수원=Сувон, 울산=Ульсан, 성남=Соннам, 용인=Йонъин, 전주=Чонджу,
-  창원=Чханвон, 고양=Коян, 안산=Ансан, 안양=Анян, 남양주=Намянджу, 화성=Хвасон,
-  평택=Пхёнтхэк, 의정부=Ыйджонбу, 시흥=Сихын, 파주=Паджу, 김포=Кимпхо,
-  광명=Кванмён, 경기=Кёнги, 경남=Кённам, 경북=Кёнбук, 충남=Чхунчхам, 충북=Чхунбук,
-  전남=Чоннам, 전북=Чонбук, 강원=Канвон, 제주=Чеджу, 구리=Гури, 하남=Хасон,
-  오산=Осан, 군포=Кунпхо, 의왕=Ыйван, 양주=Янджу, 동두천=Тондучхон
-  Если корейское название не в списке — транслитерируй на русский. Если не упомянуто — "—" """
+            name = f"{car.get('Manufacturer', '')} {car.get('Model', '')} {car.get('Badge', '')}".strip()
+            city_raw = car.get("ServiceCoporation", "") or car.get("OfficeCityState", "") or ""
 
-PRICE_PROMPT = """- price: цена авто в вонах, ТОЛЬКО цифры без пробелов и запятых.
-  ВАЖНО — корейский счёт: 만=10000, 천=1000, 백=100
-  Примеры перевода:
-  "오천오백만" = 5500 * 10000 = 55000000
-  "사천삼백만" = 4300 * 10000 = 43000000
-  "삼천만" = 3000 * 10000 = 30000000
-  "육천만" = 6000 * 10000 = 60000000
-  На русском: "пятьдесят пять миллионов" = 55000000, "сорок три миллиона" = 43000000
-  Если цена озвучена как "X миллионов Y тысяч" → X*1000000 + Y*1000
-  Результат записывай цифрами без пробелов. Если не упомянута — "—" """
+            return {
+                "name": name or "—",
+                "city": translate_city(city_raw),
+            }
+    except Exception:
+        return {}
 
-MEDOBI_PROMPT = """- medobi: медоби/매도비 — комиссия дилера в вонах, ТОЛЬКО цифры без пробелов.
-  ВАЖНО — корейский счёт: 만=10000
-  Примеры: "삼십삼만" = 33 * 10000 = 330000, "사십사만" = 44 * 10000 = 440000
-  На русском: "триста тридцать тысяч" = 330000, "четыреста сорок тысяч" = 440000
-  Если не упомянуто — "нет" """
+def translate_city(raw: str) -> str:
+    """Переводим корейский город на русский."""
+    cities = {
+        "서울": "Сеул", "부산": "Пусан", "인천": "Инчхон", "대구": "Тэгу",
+        "대전": "Тэджон", "광주": "Кванджу", "수원": "Сувон", "울산": "Ульсан",
+        "성남": "Соннам", "용인": "Йонъин", "전주": "Чонджу", "창원": "Чханвон",
+        "고양": "Коян", "안산": "Ансан", "안양": "Анян", "남양주": "Намянджу",
+        "화성": "Хвасон", "평택": "Пхёнтхэк", "의정부": "Ыйджонбу",
+        "시흥": "Сихын", "파주": "Паджу", "김포": "Кимпхо", "광명": "Кванмён",
+        "경기": "Кёнги", "경남": "Кённам", "경북": "Кёнбук", "충남": "Чхунчхам",
+        "충북": "Чхунбук", "전남": "Чоннам", "전북": "Чонбук", "강원": "Канвон",
+        "제주": "Чеджу", "구리": "Гури", "하남": "Хасон", "오산": "Осан",
+        "청주": "Чонджу", "군포": "Кунпхо", "의왕": "Ыйван", "양주": "Янджу",
+    }
+    for kr, ru in cities.items():
+        if kr in raw:
+            return ru
+    return raw if raw else "—"
 
-CONDITION_PROMPT = """- condition: состояние кузова.
-  Если чистая/깨끗하다/이상없다 — "чистая".
-  Если есть кузовные работы — переведи каждый пункт на русский и добавь в конце "надо смотреть":
-    도색 있다 / 도색이 좀 있습니다 → "перекрас"
-    판금 했다 / 판금 있습니다 → "рихтовка"
-    교환했습니다 / 교체했습니다 → "замена [детали]"
-    앞휀다 교환 → "замена переднего крыла"
-    뒷휀다 교환 → "замена заднего крыла"
-    범퍼 교환 → "замена бампера"
-    도어 교환 → "замена двери"
-    후드 교환 → "замена капота"
-    트렁크 교환 → "замена крышки багажника"
-    사고차 / 사고 있다 → "битая"
-    찍힘 → "вмятина"
-    긁힘 / 스크래치 → "царапина"
-  Пример: "도색이 좀 있습니다, 앞휀다 교환했습니다" → "перекрас, замена переднего крыла — надо смотреть"
-  Если не упомянуто — "—" """
-
-# ── Транскрипция ─────────────────────────────────────────────────────────────
-async def transcribe_voice(file_path: str) -> str:
-    with open(file_path, "rb") as f:
-        result = groq_client.audio.transcriptions.create(
-            file=("voice.ogg", f),
-            model="whisper-large-v3",
-            language="ru",
-        )
-    return result.text.strip()
-
-# ── Извлечение полей через Claude API ────────────────────────────────────────
-async def ask_claude(prompt: str) -> dict:
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 500,
-                "system": "Ты помощник который извлекает данные из текста и возвращает ТОЛЬКО валидный JSON без пояснений и markdown.",
-                "messages": [{"role": "user", "content": prompt}],
-            },
-        )
-        data = resp.json()
-        raw = data["content"][0]["text"].strip()
-        raw = re.sub(r"```json|```", "", raw).strip()
-        match = re.search(r'\{.*\}', raw, re.DOTALL)
-        if match:
-            raw = match.group(0)
-        return json.loads(raw)
-
-async def extract_fields(text: str) -> dict:
-    prompt = f"""Из текста извлеки данные об автомобиле и верни ТОЛЬКО JSON.
-
-Текст: "{text}"
-
-Поля:
-- name: марка и модель авто (например "BMW X5", "Mercedes C-класс"). Если не упомянуто — "—"
-{PLATE_PROMPT}
-{PRICE_PROMPT}
-- keys: количество ключей (только цифра: "1" или "2"). Если не упомянуто — "—"
-{CONDITION_PROMPT}
-- kesanso: кесансо (например "100%" или "нет"). Если не упомянуто — "—"
-{MEDOBI_PROMPT}
-{MALSO_PROMPT}
-{CITY_PROMPT}
-
-Верни строго JSON:
-{{"name": "BMW X5", "plate": "56무2942", "price": "55000000", "keys": "2", "condition": "чистая", "kesanso": "100%", "medobi": "330000", "malso": "сразу", "city": "Ансан"}}"""
-    return await ask_claude(prompt)
-
-async def extract_fields_from_call(transcript: str) -> dict:
-    prompt = f"""Это транскрипция телефонного разговора с корейским автодилером. Извлеки данные и верни ТОЛЬКО JSON.
-
-Транскрипция: "{transcript}"
-
-Поля:
-- name: марка и модель авто. Если не упомянуто — "—"
-{PLATE_PROMPT}
-{PRICE_PROMPT}
-- keys: количество ключей ("1" или "2"). Ищи фразы типа "열쇠", "키". Если не упомянуто — "—"
-{CONDITION_PROMPT}
-- kesanso: кесансо/계산서. Если 100% — "100%". Если нет — "нет". Если не упомянуто — "—"
-{MEDOBI_PROMPT}
-{MALSO_PROMPT}
-{CITY_PROMPT}
-
-Верни строго JSON:
-{{"name": "Mercedes GLE", "plate": "363소2470", "price": "96500000", "keys": "2", "condition": "перекрас, замена переднего крыла — надо смотреть", "kesanso": "100%", "medobi": "440000", "malso": "сразу", "city": "Сувон"}}"""
-    return await ask_claude(prompt)
-
-# ── Форматирование ───────────────────────────────────────────────────────────
-def fmt_money(text: str) -> str:
-    if not text or text in ("—", "нет"):
-        return text
-    nums = re.findall(r"\d+", text.replace(",", "").replace(" ", ""))
-    if nums:
-        try:
-            return f"{int(''.join(nums)):,}"
-        except:
-            pass
-    return text
-
-def fmt_malso(text: str) -> str:
-    if not text or text == "—":
-        return "—"
-    if re.match(r"^\d{8}$", text):
-        return f"{text[6:8]}.{text[4:6]}.{text[0:4]}"
-    return text
-
+# ── Форматирование ────────────────────────────────────────────────────────────
 def get_last4(plate: str) -> str:
     if not plate or plate == "—":
         return ""
     digits = re.findall(r"\d+", plate)
     if len(digits) >= 2:
         return digits[-1][-4:]
+    elif digits:
+        return digits[-1][-4:]
     return ""
 
 def format_result(data: dict) -> str:
-    url = data.get("url", "")
     name = data.get("name", "—")
     plate = data.get("plate", "—")
     last4 = get_last4(plate)
     name_with_plate = f"{name} {last4}".strip() if last4 else name
 
+    price = data.get("price", "—")
+    try:
+        price_fmt = f"{int(price.replace(',','').replace(' ','')):,}" if price != "—" else "—"
+    except:
+        price_fmt = price
+
+    medobi = data.get("medobi", "—")
+    try:
+        medobi_fmt = f"{int(medobi.replace(',','').replace(' ','')):,}" if medobi not in ("—", "нет") else medobi
+    except:
+        medobi_fmt = medobi
+
     lines = [
-        url,
+        data.get("url", ""),
         "",
         name_with_plate,
         plate,
         "",
-        fmt_money(data.get("price", "—")),
+        price_fmt,
         "",
         f"🔑 {data.get('keys', '—')}",
         "",
@@ -210,9 +116,9 @@ def format_result(data: dict) -> str:
         "",
         f"Кесансо: {data.get('kesanso', '—')}",
         "",
-        f"Медоби: {fmt_money(data.get('medobi', '—'))}",
+        f"Медоби: {medobi_fmt}",
         "",
-        f"Мальсо: {fmt_malso(data.get('malso', '—'))}",
+        f"Мальсо: {data.get('malso', '—')}",
         "",
         f"📍 {data.get('city', '—')}",
         "",
@@ -220,7 +126,49 @@ def format_result(data: dict) -> str:
     ]
     return "\n".join(lines)
 
-# ── Хэндлеры ────────────────────────────────────────────────────────────────
+# ── Кнопки ────────────────────────────────────────────────────────────────────
+def keys_keyboard():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔑 1", callback_data="keys_1"),
+        InlineKeyboardButton("🔑 2", callback_data="keys_2"),
+    ]])
+
+def condition_keyboard():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Чистая", callback_data="cond_clean"),
+        InlineKeyboardButton("🔍 Надо смотреть", callback_data="cond_check"),
+    ]])
+
+def kesanso_keyboard():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("100%", callback_data="kes_100"),
+        InlineKeyboardButton("Нет", callback_data="kes_no"),
+        InlineKeyboardButton("Ввести сумму", callback_data="kes_input"),
+    ]])
+
+def medobi_keyboard():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("440,000", callback_data="med_440"),
+        InlineKeyboardButton("450,000", callback_data="med_450"),
+        InlineKeyboardButton("Другое", callback_data="med_input"),
+    ]])
+
+def malso_keyboard():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("Сразу", callback_data="mal_now"),
+        InlineKeyboardButton("Завтра", callback_data="mal_tomorrow"),
+    ],[
+        InlineKeyboardButton("1-2 недели", callback_data="mal_2weeks"),
+        InlineKeyboardButton("Другое", callback_data="mal_input"),
+    ]])
+
+def confirm_keyboard():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Отправить", callback_data="send"),
+        InlineKeyboardButton("🔄 Заново", callback_data="restart"),
+    ]])
+
+# ── Хэндлеры ─────────────────────────────────────────────────────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Отправь ссылку на авто.")
     return WAITING_LINK
@@ -232,102 +180,130 @@ async def receive_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return WAITING_LINK
 
     ctx.user_data.clear()
-    ctx.user_data["url"] = text
-    await update.message.reply_text(
-        "🎤 Отправь голосовое или запись звонка (m4a/mp3):\n\n"
-        "Марка, номер, цена, ключи, состояние, кесансо, медоби, мальсо, город"
-    )
-    return WAITING_VOICE
+    ctx.user_data["url"] = text.strip()
 
-async def receive_audio_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    audio = update.message.audio or update.message.document
-    file = await audio.get_file()
-    ext = "m4a" if (update.message.audio or (update.message.document and "m4a" in (update.message.document.file_name or ""))) else "mp3"
-    path = f"/tmp/audio_{update.message.message_id}.{ext}"
-    await file.download_to_drive(path)
-    msg = await update.message.reply_text("⏳ Транскрибирую звонок...")
+    msg = await update.message.reply_text("⏳ Загружаю данные авто...")
 
-    try:
-        with open(path, "rb") as f:
-            result = groq_client.audio.transcriptions.create(
-                file=(f"audio.{ext}", f),
-                model="whisper-large-v3",
-                language="ko",
-            )
-        transcript = result.text.strip()
-        os.remove(path)
-    except Exception as e:
-        await msg.edit_text(f"❌ Не смог транскрибировать файл.\n\n{e}")
-        return WAITING_VOICE
+    parsed = await parse_encar(text)
+    ctx.user_data["name"] = parsed.get("name", "—")
+    ctx.user_data["city"] = parsed.get("city", "—")
 
-    await msg.edit_text("🗣 Транскрипция готова.\n⏳ Разбираю данные...")
+    name = ctx.user_data["name"]
+    city = ctx.user_data["city"]
+    info = f"🚗 *{name}*" if name != "—" else "🚗 Авто"
+    if city != "—":
+        info += f"  📍 {city}"
 
-    try:
-        data = await extract_fields_from_call(transcript)
-    except Exception as e:
-        await msg.edit_text(f"❌ Не смог разобрать. Попробуй ещё раз.\n\n{e}")
-        return WAITING_VOICE
-
-    data["url"] = ctx.user_data.get("url", "")
-    ctx.user_data["fields"] = data
-    result_text = format_result(data)
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Отправить", callback_data="send"),
-        InlineKeyboardButton("🔄 Заново", callback_data="restart"),
-    ]])
     await msg.edit_text(
-        f"```\n{result_text}\n```",
-        parse_mode="Markdown",
-        reply_markup=keyboard,
+        f"{info}\n\nВведи *номер авто* (например: 256수7232)",
+        parse_mode="Markdown"
     )
+    return WAITING_PLATE
+
+async def receive_plate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["plate"] = update.message.text.strip()
+    await update.message.reply_text("Введи *цену* в вонах (например: 26500000)", parse_mode="Markdown")
+    return WAITING_PRICE
+
+async def receive_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["price"] = update.message.text.strip()
+    await update.message.reply_text("Выбери количество ключей:", reply_markup=keys_keyboard())
+    return WAITING_KEYS
+
+async def keys_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    ctx.user_data["keys"] = "1" if query.data == "keys_1" else "2"
+    await query.message.reply_text("Состояние кузова:", reply_markup=condition_keyboard())
+    return WAITING_CONDITION
+
+async def condition_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    ctx.user_data["condition"] = "чистая" if query.data == "cond_clean" else "надо смотреть"
+    await query.message.reply_text("Кесансо:", reply_markup=kesanso_keyboard())
+    return WAITING_KESANSO
+
+async def kesanso_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "kes_100":
+        ctx.user_data["kesanso"] = "100%"
+        await query.message.reply_text("Медоби:", reply_markup=medobi_keyboard())
+        return WAITING_MEDOBI
+    elif query.data == "kes_no":
+        ctx.user_data["kesanso"] = "нет"
+        await query.message.reply_text("Медоби:", reply_markup=medobi_keyboard())
+        return WAITING_MEDOBI
+    else:
+        await query.message.reply_text("Введи сумму кесансо:")
+        return WAITING_KESANSO_INPUT
+
+async def kesanso_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["kesanso"] = update.message.text.strip()
+    await update.message.reply_text("Медоби:", reply_markup=medobi_keyboard())
+    return WAITING_MEDOBI
+
+async def medobi_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "med_440":
+        ctx.user_data["medobi"] = "440000"
+        await query.message.reply_text("Мальсо:", reply_markup=malso_keyboard())
+        return WAITING_MALSO
+    elif query.data == "med_450":
+        ctx.user_data["medobi"] = "450000"
+        await query.message.reply_text("Мальсо:", reply_markup=malso_keyboard())
+        return WAITING_MALSO
+    else:
+        await query.message.reply_text("Введи сумму медоби:")
+        return WAITING_MEDOBI_INPUT
+
+async def medobi_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["medobi"] = update.message.text.strip()
+    await update.message.reply_text("Мальсо:", reply_markup=malso_keyboard())
+    return WAITING_MALSO
+
+async def malso_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    mapping = {
+        "mal_now": "сразу",
+        "mal_tomorrow": "завтра",
+        "mal_2weeks": "1-2 недели",
+    }
+    if query.data in mapping:
+        ctx.user_data["malso"] = mapping[query.data]
+        await show_confirm(query.message, ctx)
+        return CONFIRM
+    else:
+        await query.message.reply_text("Введи дату или срок мальсо:")
+        return WAITING_MALSO_INPUT
+
+async def malso_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["malso"] = update.message.text.strip()
+    await show_confirm(update.message, ctx)
     return CONFIRM
 
-async def receive_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if update.message.voice:
-        file = await update.message.voice.get_file()
-        path = f"/tmp/voice_{update.message.message_id}.ogg"
-        await file.download_to_drive(path)
-        msg = await update.message.reply_text("⏳ Распознаю...")
-        text = await transcribe_voice(path)
-        os.remove(path)
-        await msg.edit_text(f"🗣 _{text}_\n\n⏳ Разбираю...", parse_mode="Markdown")
-    else:
-        text = update.message.text or ""
-        msg = await update.message.reply_text("⏳ Разбираю...")
-
-    try:
-        data = await extract_fields(text)
-    except Exception as e:
-        await msg.edit_text(f"❌ Не смог разобрать. Попробуй ещё раз.\n\n{e}")
-        return WAITING_VOICE
-
-    data["url"] = ctx.user_data.get("url", "")
-    ctx.user_data["fields"] = data
-    result = format_result(data)
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Отправить", callback_data="send"),
-        InlineKeyboardButton("🔄 Заново", callback_data="restart"),
-    ]])
-    await msg.edit_text(
+async def show_confirm(message, ctx: ContextTypes.DEFAULT_TYPE):
+    result = format_result(ctx.user_data)
+    ctx.user_data["final_result"] = result
+    await message.reply_text(
         f"```\n{result}\n```",
         parse_mode="Markdown",
-        reply_markup=keyboard,
+        reply_markup=confirm_keyboard(),
     )
-    return CONFIRM
 
 async def confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     if query.data == "send":
-        result = format_result(ctx.user_data.get("fields", {}))
+        result = ctx.user_data.get("final_result") or format_result(ctx.user_data)
         await query.message.reply_text(result)
         ctx.user_data.clear()
         await query.message.reply_text("✅ Готово! Отправь новую ссылку.")
         return WAITING_LINK
-
     elif query.data == "restart":
         ctx.user_data.clear()
         await query.message.reply_text("Отправь ссылку на авто.")
@@ -338,7 +314,7 @@ async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Отменено. Отправь ссылку чтобы начать.")
     return WAITING_LINK
 
-# ── Запуск ───────────────────────────────────────────────────────────────────
+# ── Запуск ────────────────────────────────────────────────────────────────────
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
@@ -348,17 +324,22 @@ def main():
             MessageHandler(filters.TEXT & filters.Regex(r"http"), receive_link),
         ],
         states={
-            WAITING_LINK:  [MessageHandler(filters.TEXT, receive_link)],
-            WAITING_VOICE: [
-                MessageHandler(filters.VOICE, receive_voice),
-                MessageHandler(filters.AUDIO, receive_audio_file),
-                MessageHandler(filters.Document.MimeType("audio/mp4") | filters.Document.MimeType("audio/mpeg") | filters.Document.MimeType("audio/m4a"), receive_audio_file),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_voice),
-            ],
-            CONFIRM: [CallbackQueryHandler(confirm_callback)],
+            WAITING_LINK: [MessageHandler(filters.TEXT, receive_link)],
+            WAITING_PLATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_plate)],
+            WAITING_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_price)],
+            WAITING_KEYS: [CallbackQueryHandler(keys_callback, pattern="^keys_")],
+            WAITING_CONDITION: [CallbackQueryHandler(condition_callback, pattern="^cond_")],
+            WAITING_KESANSO: [CallbackQueryHandler(kesanso_callback, pattern="^kes_")],
+            WAITING_KESANSO_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, kesanso_input)],
+            WAITING_MEDOBI: [CallbackQueryHandler(medobi_callback, pattern="^med_")],
+            WAITING_MEDOBI_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, medobi_input)],
+            WAITING_MALSO: [CallbackQueryHandler(malso_callback, pattern="^mal_")],
+            WAITING_MALSO_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, malso_input)],
+            CONFIRM: [CallbackQueryHandler(confirm_callback, pattern="^(send|restart)$")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_user=True,
+        per_message=False,
     )
 
     app.add_handler(conv)
