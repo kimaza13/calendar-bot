@@ -11,7 +11,7 @@ from telegram.ext import (
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
 # ── Состояния ─────────────────────────────────────────────────────────────────
-WAITING_LINK, WAITING_TEXT_INPUT, FILLING, CONFIRM = range(4)
+WAITING_LINK, FILLING, WAITING_TEXT_INPUT = range(3)
 
 # ── Перевод городов ───────────────────────────────────────────────────────────
 CITY_MAP = {
@@ -21,20 +21,21 @@ CITY_MAP = {
     "고양": "Коян", "안산": "Ансан", "안양": "Анян", "남양주": "Намянджу",
     "화성": "Хвасон", "평택": "Пхёнтхэк", "의정부": "Ыйджонбу",
     "시흥": "Сихын", "파주": "Паджу", "김포": "Кимпхо", "광명": "Кванмён",
-    "경기": "Кёнги", "경남": "Кённам", "경북": "Кёнбук", "충남": "Чхунчхам",
-    "충북": "Чхунбук", "전남": "Чоннам", "전북": "Чонбук", "강원": "Канвон",
-    "제주": "Чеджу", "구리": "Гури", "하남": "Хасон", "오산": "Осан",
-    "청주": "Чонджу", "군포": "Кунпхо", "의왕": "Ыйван", "양주": "Янджу",
-    "천안": "Чхонан", "아산": "Асан", "원주": "Вонджу", "춘천": "Чхунчхон",
-    "구미": "Куми", "포항": "Пхохан", "진주": "Чинджу", "목포": "Мокпхо",
-    "여수": "Ёсу", "순천": "Сунчхон",
+    "경기": "Кёнги (пров.)", "경남": "Кённам", "경북": "Кёнбук",
+    "충남": "Чхунчхам", "충북": "Чхунбук", "전남": "Чоннам",
+    "전북": "Чонбук", "강원": "Канвон", "제주": "Чеджу",
+    "구리": "Гури", "하남": "Хасон", "오산": "Осан", "청주": "Чонджу",
+    "군포": "Кунпхо", "의왕": "Ыйван", "양주": "Янджу",
+    "천안": "Чхонан", "아산": "Асан", "원주": "Вонджу",
+    "춘천": "Чхунчхон", "구미": "Куми", "포항": "Пхохан",
+    "진주": "Чинджу", "목포": "Мокпхо", "여수": "Ёсу", "순천": "Сунчхон",
 }
 
 def translate_city(raw: str) -> str:
     for kr, ru in CITY_MAP.items():
         if kr in raw:
             return ru
-    return raw if raw else "—"
+    return raw.strip() if raw.strip() else "—"
 
 # ── Перевод марок/моделей ─────────────────────────────────────────────────────
 BRAND_MAP = {
@@ -55,7 +56,10 @@ MODEL_MAP = {
     "C클래스": "C-класс", "E클래스": "E-класс", "S클래스": "S-класс",
     "5시리즈": "5 Series", "3시리즈": "3 Series", "7시리즈": "7 Series",
 }
-NOISE = ["세대", "중고차", "프레스티지", "익스클루시브", "모던", "프리미엄", "럭셔리"]
+NOISE_WORDS = [
+    "세대", "중고차", "프레스티지", "익스클루시브", "모던", "프리미엄",
+    "럭셔리", "하이브리드", "터보", "가솔린", "디젤", "내차팔기", "내차사기",
+]
 
 def translate_name(raw: str) -> str:
     if not raw:
@@ -63,13 +67,40 @@ def translate_name(raw: str) -> str:
     result = raw
     for kr, en in {**BRAND_MAP, **MODEL_MAP}.items():
         result = result.replace(kr, en)
-    for w in NOISE:
-        result = re.sub(rf'\d*{w}', '', result)
+    for w in NOISE_WORDS:
+        result = re.sub(rf'\d*\s*{w}', ' ', result)
+    # Убираем цифры с точкой (объём двигателя типа "2.0")
+    result = re.sub(r'\b\d+\.\d+\b', '', result)
     result = re.sub(r'\s+', ' ', result).strip()
     return result or "—"
 
-# ── Парсинг Encar API ─────────────────────────────────────────────────────────
-async def parse_encar(car_id: str) -> dict:
+# ── Парсинг из текста превью Telegram ─────────────────────────────────────────
+def parse_preview_text(text: str) -> dict:
+    """
+    Telegram показывает превью Encar в виде текста типа:
+    "K5 3세대 2.0 프레스티지 경기 중고차 : 내차팔기..."
+    Извлекаем из него марку/модель и регион.
+    """
+    result = {"name": "—", "city": "—"}
+    if not text:
+        return result
+
+    # Ищем регион перед словом 중고차
+    city_match = re.search(r'([가-힣]{2,4})\s*중고차', text)
+    if city_match:
+        result["city"] = translate_city(city_match.group(1))
+
+    # Первая строка до двоеточия — это обычно название авто
+    first_part = text.split(':')[0].split('\n')[0].strip()
+    if first_part:
+        name = translate_name(first_part)
+        if name and name != "—":
+            result["name"] = name
+
+    return result
+
+# ── Парсинг Encar API (резервный) ────────────────────────────────────────────
+async def parse_encar_api(car_id: str) -> dict:
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
         "Accept": "application/json",
@@ -77,10 +108,10 @@ async def parse_encar(car_id: str) -> dict:
         "Referer": f"https://fem.encar.com/cars/detail/{car_id}",
     }
     try:
-        async with httpx.AsyncClient(timeout=12) as client:
+        async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
                 f"https://api.encar.com/search/car/list/mobile?count=1&q=(Id:{car_id})",
-                headers=headers
+                headers=headers,
             )
             if resp.status_code == 200:
                 cars = resp.json().get("SearchResults", [])
@@ -98,13 +129,13 @@ async def parse_encar(car_id: str) -> dict:
 
 # ── Форматирование ────────────────────────────────────────────────────────────
 def fmt_money(val: str) -> str:
-    if not val or val in ("—", "нет", "Нет"):
+    if not val or val in ("—", "нет"):
         return val or "—"
     nums = re.findall(r"\d+", val.replace(",", "").replace(" ", ""))
     if nums:
         try:
             return f"{int(''.join(nums)):,}"
-        except:
+        except Exception:
             pass
     return val
 
@@ -114,40 +145,40 @@ def get_last4(plate: str) -> str:
     digits = re.findall(r"\d+", plate)
     return digits[-1][-4:] if digits else ""
 
-def format_result(data: dict) -> str:
-    name  = data.get("name", "—")
-    plate = data.get("plate", "—")
+def format_result(d: dict) -> str:
+    name  = d.get("name", "—")
+    plate = d.get("plate", "—")
     last4 = get_last4(plate)
     lines = [
-        data.get("url", ""),
+        d.get("url", ""),
         "",
         f"{name} {last4}".strip() if last4 else name,
         plate,
         "",
-        fmt_money(data.get("price", "—")),
+        fmt_money(d.get("price", "—")),
         "",
-        f"🔑 {data.get('keys', '—')}",
+        f"🔑 {d.get('keys', '—')}",
         "",
-        f"Состояние: {data.get('condition', '—')}",
+        f"Состояние: {d.get('condition', '—')}",
         "",
-        f"Кесансо: {fmt_money(data.get('kesanso', '—'))}",
+        f"Кесансо: {fmt_money(d.get('kesanso', '—'))}",
         "",
-        f"Медоби: {fmt_money(data.get('medobi', '—'))}",
+        f"Медоби: {fmt_money(d.get('medobi', '—'))}",
         "",
-        f"Мальсо: {data.get('malso', '—')}",
+        f"Мальсо: {d.get('malso', '—')}",
         "",
-        f"📍 {data.get('city', '—')}",
+        f"📍 {d.get('city', '—')}",
         "",
         "⚠️ Перед осмотром обязательно связаться с дилером",
     ]
     return "\n".join(lines)
 
-# ── Форма (текст + кнопки) ────────────────────────────────────────────────────
+# ── Форма ─────────────────────────────────────────────────────────────────────
 def build_form_text(d: dict) -> str:
     name  = d.get("name", "—")
     city  = d.get("city", "—")
-    plate = d.get("plate", "—")
-    price = d.get("price", "—")
+    plate = d.get("plate") or "не введён"
+    price = d.get("price") or "не введена"
     return "\n".join([
         f"🚗 *{name}*  📍 {city}",
         "",
@@ -160,45 +191,51 @@ def build_form_text(d: dict) -> str:
         f"Мальсо: {d.get('malso', '—')}",
     ])
 
-def build_keyboard(d: dict) -> InlineKeyboardMarkup:
-    def chk(key, val):
-        return " ✅" if d.get(key) == val else ""
+def chk(d, key, val):
+    return " ✅" if d.get(key) == val else ""
 
+def build_keyboard(d: dict) -> InlineKeyboardMarkup:
     rows = [
+        # Номер и цена
+        [
+            InlineKeyboardButton("✏️ Номер авто", callback_data="edit_plate"),
+            InlineKeyboardButton("✏️ Цена", callback_data="edit_price"),
+        ],
         # Ключи
         [
-            InlineKeyboardButton(f"🔑 1{chk('keys','1')}", callback_data="keys_1"),
-            InlineKeyboardButton(f"🔑 2{chk('keys','2')}", callback_data="keys_2"),
+            InlineKeyboardButton(f"🔑 1{chk(d,'keys','1')}", callback_data="keys_1"),
+            InlineKeyboardButton(f"🔑 2{chk(d,'keys','2')}", callback_data="keys_2"),
         ],
         # Состояние
         [
-            InlineKeyboardButton(f"✅ Чистая{chk('condition','чистая')}", callback_data="cond_clean"),
-            InlineKeyboardButton(f"🔍 Надо смотреть{chk('condition','надо смотреть')}", callback_data="cond_check"),
+            InlineKeyboardButton(f"✅ Чистая{chk(d,'condition','чистая')}", callback_data="cond_clean"),
+            InlineKeyboardButton(f"🔍 Надо смотреть{chk(d,'condition','надо смотреть')}", callback_data="cond_check"),
         ],
         # Кесансо
         [
-            InlineKeyboardButton(f"Кесансо 100%{chk('kesanso','100%')}", callback_data="kes_100"),
-            InlineKeyboardButton(f"Нет{chk('kesanso','нет')}", callback_data="kes_no"),
+            InlineKeyboardButton(f"Кесансо 100%{chk(d,'kesanso','100%')}", callback_data="kes_100"),
+            InlineKeyboardButton(f"Нет{chk(d,'kesanso','нет')}", callback_data="kes_no"),
             InlineKeyboardButton("Кесансо ↩", callback_data="kes_input"),
         ],
         # Медоби
         [
-            InlineKeyboardButton(f"440,000{chk('medobi','440000')}", callback_data="med_440"),
-            InlineKeyboardButton(f"450,000{chk('medobi','450000')}", callback_data="med_450"),
-            InlineKeyboardButton(f"330,000{chk('medobi','330000')}", callback_data="med_330"),
+            InlineKeyboardButton(f"440,000{chk(d,'medobi','440000')}", callback_data="med_440"),
+            InlineKeyboardButton(f"450,000{chk(d,'medobi','450000')}", callback_data="med_450"),
+            InlineKeyboardButton(f"330,000{chk(d,'medobi','330000')}", callback_data="med_330"),
             InlineKeyboardButton("Медоби ↩", callback_data="med_input"),
         ],
         # Мальсо
         [
-            InlineKeyboardButton(f"Сразу{chk('malso','сразу')}", callback_data="mal_now"),
-            InlineKeyboardButton(f"Завтра{chk('malso','завтра')}", callback_data="mal_tomorrow"),
-            InlineKeyboardButton(f"1-2 нед{chk('malso','1-2 недели')}", callback_data="mal_2weeks"),
+            InlineKeyboardButton(f"Сразу{chk(d,'malso','сразу')}", callback_data="mal_now"),
+            InlineKeyboardButton(f"Завтра{chk(d,'malso','завтра')}", callback_data="mal_tomorrow"),
+            InlineKeyboardButton(f"1-2 нед{chk(d,'malso','1-2 недели')}", callback_data="mal_2weeks"),
             InlineKeyboardButton("Мальсо ↩", callback_data="mal_input"),
         ],
     ]
 
-    # Кнопка отправить — только если все поля заполнены
-    if all(d.get(k) for k in ["plate", "price", "keys", "condition", "kesanso", "medobi", "malso"]):
+    # Кнопка отправить — только когда всё заполнено
+    required = ["plate", "price", "keys", "condition", "kesanso", "medobi", "malso"]
+    if all(d.get(k) for k in required):
         rows.append([InlineKeyboardButton("✅ Отправить", callback_data="send")])
 
     rows.append([InlineKeyboardButton("🔄 Заново", callback_data="restart")])
@@ -222,72 +259,67 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return WAITING_LINK
 
 async def receive_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text = (update.message.text or "").strip()
-    if "http" not in text:
+    msg_text = (update.message.text or "").strip()
+    if "http" not in msg_text:
         await update.message.reply_text("Не вижу ссылку. Попробуй ещё раз.")
         return WAITING_LINK
 
     ctx.user_data.clear()
-    ctx.user_data["url"] = text
+    ctx.user_data["url"] = msg_text
 
-    match = re.search(r'/detail/(\d+)', text)
+    # Пробуем извлечь превью из сущностей сообщения (link preview text)
+    preview_text = ""
+    if update.message.entities:
+        for ent in update.message.entities:
+            if hasattr(ent, 'url') and ent.url:
+                preview_text = ent.url
+    # Telegram иногда передаёт текст превью через caption или text after URL
+    # Берём весь текст после первой строки (URL)
+    lines = msg_text.split('\n')
+    if len(lines) > 1:
+        preview_text = '\n'.join(lines[1:])
+
+    match = re.search(r'/detail/(\d+)', msg_text)
     car_id = match.group(1) if match else None
 
-    msg = await update.message.reply_text("⏳ Загружаю данные авто...")
+    processing_msg = await update.message.reply_text("⏳ Загружаю данные авто...")
 
-    parsed = await parse_encar(car_id) if car_id else {}
+    # 1) Пробуем API
+    parsed = {}
+    if car_id:
+        parsed = await parse_encar_api(car_id)
+
+    # 2) Если API не дало — парсим превью текст
+    if (not parsed.get("name") or parsed.get("name") == "—") and preview_text:
+        from_preview = parse_preview_text(preview_text)
+        if from_preview.get("name") and from_preview["name"] != "—":
+            parsed["name"] = from_preview["name"]
+        if from_preview.get("city") and from_preview["city"] != "—":
+            parsed["city"] = from_preview["city"]
+
     ctx.user_data["name"] = parsed.get("name", "—")
     ctx.user_data["city"] = parsed.get("city", "—")
 
-    name_line = f"*{ctx.user_data['name']}*" if ctx.user_data['name'] != "—" else "авто"
-    city_line = f"  📍 {ctx.user_data['city']}" if ctx.user_data['city'] != "—" else ""
+    await processing_msg.delete()
 
-    await msg.edit_text(
-        f"🚗 {name_line}{city_line}\n\nВведи *номер авто* (например: 256수7232):",
-        parse_mode="Markdown"
+    # Показываем форму сразу
+    form_msg = await update.message.reply_text(
+        build_form_text(ctx.user_data),
+        parse_mode="Markdown",
+        reply_markup=build_keyboard(ctx.user_data),
     )
-    ctx.user_data["waiting_for"] = "plate"
-    return WAITING_TEXT_INPUT
-
-async def receive_text_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    val = (update.message.text or "").strip()
-    field = ctx.user_data.get("waiting_for")
-
-    if field == "plate":
-        ctx.user_data["plate"] = val
-        await update.message.reply_text(
-            "💰 Введи *цену* в вонах (например: 26500000):",
-            parse_mode="Markdown"
-        )
-        ctx.user_data["waiting_for"] = "price"
-        return WAITING_TEXT_INPUT
-
-    elif field == "price":
-        ctx.user_data["price"] = val
-        ctx.user_data["waiting_for"] = None
-        # Показываем форму с кнопками
-        m = await update.message.reply_text(
-            build_form_text(ctx.user_data),
-            parse_mode="Markdown",
-            reply_markup=build_keyboard(ctx.user_data),
-        )
-        ctx.user_data["form_msg"] = m.message_id
-        ctx.user_data["form_chat"] = m.chat_id
-        return FILLING
-
-    elif field in ("kesanso_custom", "medobi_custom", "malso_custom"):
-        key = field.replace("_custom", "")
-        ctx.user_data[key] = val
-        ctx.user_data["waiting_for"] = None
-        await refresh_form(ctx)
-        return FILLING
-
+    ctx.user_data["form_msg"] = form_msg.message_id
+    ctx.user_data["form_chat"] = form_msg.chat_id
     return FILLING
 
 async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     d = query.data
+
+    # Сохраняем id формы
+    ctx.user_data["form_msg"] = query.message.message_id
+    ctx.user_data["form_chat"] = query.message.chat_id
 
     if d == "restart":
         ctx.user_data.clear()
@@ -301,8 +333,8 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("✅ Готово! Отправь новую ссылку.")
         return WAITING_LINK
 
-    # Обновляем данные
-    mapping = {
+    # Простые кнопки
+    simple = {
         "keys_1": ("keys", "1"), "keys_2": ("keys", "2"),
         "cond_clean": ("condition", "чистая"), "cond_check": ("condition", "надо смотреть"),
         "kes_100": ("kesanso", "100%"), "kes_no": ("kesanso", "нет"),
@@ -311,11 +343,9 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "mal_now": ("malso", "сразу"), "mal_tomorrow": ("malso", "завтра"),
         "mal_2weeks": ("malso", "1-2 недели"),
     }
-    if d in mapping:
-        key, val = mapping[d]
+    if d in simple:
+        key, val = simple[d]
         ctx.user_data[key] = val
-        ctx.user_data["form_msg"] = query.message.message_id
-        ctx.user_data["form_chat"] = query.message.chat_id
         try:
             await query.message.edit_text(
                 build_form_text(ctx.user_data),
@@ -326,19 +356,37 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pass
         return FILLING
 
-    # Кастомный ввод
-    input_map = {
-        "kes_input": ("kesanso_custom", "Введи сумму кесансо:"),
-        "med_input": ("medobi_custom", "Введи сумму медоби:"),
-        "mal_input": ("malso_custom", "Введи дату или срок мальсо:"),
+    # Ввод текстом
+    prompts = {
+        "edit_plate": ("plate_input", "Введи *номер авто* (например: 256수7232):"),
+        "edit_price": ("price_input", "Введи *цену* в вонах (например: 26500000):"),
+        "kes_input":  ("kesanso_input", "Введи сумму кесансо:"),
+        "med_input":  ("medobi_input", "Введи сумму медоби:"),
+        "mal_input":  ("malso_input", "Введи дату или срок мальсо:"),
     }
-    if d in input_map:
-        field, prompt = input_map[d]
+    if d in prompts:
+        field, prompt = prompts[d]
         ctx.user_data["waiting_for"] = field
-        ctx.user_data["form_msg"] = query.message.message_id
-        ctx.user_data["form_chat"] = query.message.chat_id
-        await query.message.reply_text(prompt)
+        await query.message.reply_text(prompt, parse_mode="Markdown")
         return WAITING_TEXT_INPUT
+
+    return FILLING
+
+async def receive_text_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    val = (update.message.text or "").strip()
+    field = ctx.user_data.get("waiting_for")
+
+    field_map = {
+        "plate_input":   "plate",
+        "price_input":   "price",
+        "kesanso_input": "kesanso",
+        "medobi_input":  "medobi",
+        "malso_input":   "malso",
+    }
+    if field in field_map:
+        ctx.user_data[field_map[field]] = val
+        ctx.user_data["waiting_for"] = None
+        await refresh_form(ctx)
 
     return FILLING
 
@@ -358,13 +406,13 @@ def main():
         ],
         states={
             WAITING_LINK: [MessageHandler(filters.TEXT, receive_link)],
-            WAITING_TEXT_INPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_text_input),
-                CallbackQueryHandler(button_callback),
-            ],
             FILLING: [
                 CallbackQueryHandler(button_callback),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_text_input),
+            ],
+            WAITING_TEXT_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_text_input),
+                CallbackQueryHandler(button_callback),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
