@@ -10,10 +10,9 @@ from telegram.ext import (
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
-# ── Состояния ─────────────────────────────────────────────────────────────────
 WAITING_LINK, FILLING, WAITING_TEXT_INPUT = range(3)
 
-# ── Перевод городов ───────────────────────────────────────────────────────────
+# ── Города ───────────────────────────────────────────────────────────────────
 CITY_MAP = {
     "서울": "Сеул", "부산": "Пусан", "인천": "Инчхон", "대구": "Тэгу",
     "대전": "Тэджон", "광주": "Кванджу", "수원": "Сувон", "울산": "Ульсан",
@@ -37,7 +36,7 @@ def translate_city(raw: str) -> str:
             return ru
     return raw.strip() if raw.strip() else "—"
 
-# ── Перевод марок/моделей ─────────────────────────────────────────────────────
+# ── Марки/модели ──────────────────────────────────────────────────────────────
 BRAND_MAP = {
     "기아": "KIA", "현대": "Hyundai", "제네시스": "Genesis",
     "쉐보레": "Chevrolet", "르노": "Renault", "삼성": "Samsung",
@@ -56,10 +55,8 @@ MODEL_MAP = {
     "C클래스": "C-класс", "E클래스": "E-класс", "S클래스": "S-класс",
     "5시리즈": "5 Series", "3시리즈": "3 Series", "7시리즈": "7 Series",
 }
-NOISE_WORDS = [
-    "세대", "중고차", "프레스티지", "익스클루시브", "모던", "프리미엄",
-    "럭셔리", "하이브리드", "터보", "가솔린", "디젤", "내차팔기", "내차사기",
-]
+NOISE = ["세대", "중고차", "프레스티지", "익스클루시브", "모던", "프리미엄",
+         "럭셔리", "하이브리드", "터보", "가솔린", "디젤", "내차팔기", "내차사기"]
 
 def translate_name(raw: str) -> str:
     if not raw:
@@ -67,39 +64,13 @@ def translate_name(raw: str) -> str:
     result = raw
     for kr, en in {**BRAND_MAP, **MODEL_MAP}.items():
         result = result.replace(kr, en)
-    for w in NOISE_WORDS:
+    for w in NOISE:
         result = re.sub(rf'\d*\s*{w}', ' ', result)
-    # Убираем цифры с точкой (объём двигателя типа "2.0")
     result = re.sub(r'\b\d+\.\d+\b', '', result)
     result = re.sub(r'\s+', ' ', result).strip()
     return result or "—"
 
-# ── Парсинг из текста превью Telegram ─────────────────────────────────────────
-def parse_preview_text(text: str) -> dict:
-    """
-    Telegram показывает превью Encar в виде текста типа:
-    "K5 3세대 2.0 프레스티지 경기 중고차 : 내차팔기..."
-    Извлекаем из него марку/модель и регион.
-    """
-    result = {"name": "—", "city": "—"}
-    if not text:
-        return result
-
-    # Ищем регион перед словом 중고차
-    city_match = re.search(r'([가-힣]{2,4})\s*중고차', text)
-    if city_match:
-        result["city"] = translate_city(city_match.group(1))
-
-    # Первая строка до двоеточия — это обычно название авто
-    first_part = text.split(':')[0].split('\n')[0].strip()
-    if first_part:
-        name = translate_name(first_part)
-        if name and name != "—":
-            result["name"] = name
-
-    return result
-
-# ── Парсинг Encar API (резервный) ────────────────────────────────────────────
+# ── Encar API ─────────────────────────────────────────────────────────────────
 async def parse_encar_api(car_id: str) -> dict:
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
@@ -127,7 +98,7 @@ async def parse_encar_api(car_id: str) -> dict:
         pass
     return {}
 
-# ── Форматирование ────────────────────────────────────────────────────────────
+# ── Деньги ────────────────────────────────────────────────────────────────────
 def fmt_money(val: str) -> str:
     if not val or val in ("—", "нет"):
         return val or "—"
@@ -145,11 +116,12 @@ def get_last4(plate: str) -> str:
     digits = re.findall(r"\d+", plate)
     return digits[-1][-4:] if digits else ""
 
+# ── Итоговая карточка ─────────────────────────────────────────────────────────
 def format_result(d: dict) -> str:
     name  = d.get("name", "—")
     plate = d.get("plate", "—")
     last4 = get_last4(plate)
-    lines = [
+    return "\n".join([
         d.get("url", ""),
         "",
         f"{name} {last4}".strip() if last4 else name,
@@ -170,37 +142,49 @@ def format_result(d: dict) -> str:
         f"📍 {d.get('city', '—')}",
         "",
         "⚠️ Перед осмотром обязательно связаться с дилером",
-    ]
-    return "\n".join(lines)
+    ])
 
 # ── Форма ─────────────────────────────────────────────────────────────────────
-def build_form_text(d: dict) -> str:
-    name  = d.get("name", "—")
-    city  = d.get("city", "—")
-    plate = d.get("plate") or "не введён"
-    price = d.get("price") or "не введена"
-    return "\n".join([
-        f"🚗 *{name}*  📍 {city}",
-        "",
-        f"Номер: `{plate}`",
-        f"Цена: `{fmt_money(price)}`",
-        f"Ключи: {d.get('keys', '—')}",
-        f"Состояние: {d.get('condition', '—')}",
-        f"Кесансо: {fmt_money(d.get('kesanso', '—'))}",
-        f"Медоби: {fmt_money(d.get('medobi', '—'))}",
-        f"Мальсо: {d.get('malso', '—')}",
-    ])
+def v(d, key):
+    """Значение поля или прочерк."""
+    val = d.get(key)
+    return val if val else "—"
 
 def chk(d, key, val):
     return " ✅" if d.get(key) == val else ""
 
-def build_keyboard(d: dict) -> InlineKeyboardMarkup:
+def build_form(d: dict):
+    """Возвращает (text, keyboard)."""
+
+    name  = v(d, "name")
+    plate = v(d, "plate")
+    price = v(d, "price")
+    keys  = v(d, "keys")
+    cond  = v(d, "condition")
+    kes   = fmt_money(v(d, "kesanso"))
+    med   = fmt_money(v(d, "medobi"))
+    mal   = v(d, "malso")
+    city  = v(d, "city")
+
+    text = "\n".join([
+        f"🚗 Марка и модель: *{name}*",
+        f"🔢 Номер: `{plate}`",
+        f"💵 Цена: `{fmt_money(price) if price != '—' else '—'}`",
+        f"🔑 Ключи: {keys}",
+        f"🚘 Состояние: {cond}",
+        f"📋 Кесансо: {kes}",
+        f"💰 Медоби: {med}",
+        f"📅 Мальсо: {mal}",
+        f"📍 Город: {city}",
+    ])
+
     rows = [
-        # Номер и цена
-        [
-            InlineKeyboardButton("✏️ Номер авто", callback_data="edit_plate"),
-            InlineKeyboardButton("✏️ Цена", callback_data="edit_price"),
-        ],
+        # Марка
+        [InlineKeyboardButton("✏️ Марка и модель", callback_data="edit_name")],
+        # Номер
+        [InlineKeyboardButton("✏️ Номер авто", callback_data="edit_plate")],
+        # Цена
+        [InlineKeyboardButton("✏️ Цена", callback_data="edit_price")],
         # Ключи
         [
             InlineKeyboardButton(f"🔑 1{chk(d,'keys','1')}", callback_data="keys_1"),
@@ -213,42 +197,45 @@ def build_keyboard(d: dict) -> InlineKeyboardMarkup:
         ],
         # Кесансо
         [
-            InlineKeyboardButton(f"Кесансо 100%{chk(d,'kesanso','100%')}", callback_data="kes_100"),
+            InlineKeyboardButton(f"100%{chk(d,'kesanso','100%')}", callback_data="kes_100"),
             InlineKeyboardButton(f"Нет{chk(d,'kesanso','нет')}", callback_data="kes_no"),
-            InlineKeyboardButton("Кесансо ↩", callback_data="kes_input"),
+            InlineKeyboardButton("Ввести сумму", callback_data="kes_input"),
         ],
         # Медоби
         [
             InlineKeyboardButton(f"440,000{chk(d,'medobi','440000')}", callback_data="med_440"),
             InlineKeyboardButton(f"450,000{chk(d,'medobi','450000')}", callback_data="med_450"),
             InlineKeyboardButton(f"330,000{chk(d,'medobi','330000')}", callback_data="med_330"),
-            InlineKeyboardButton("Медоби ↩", callback_data="med_input"),
+            InlineKeyboardButton("Другое", callback_data="med_input"),
         ],
         # Мальсо
         [
             InlineKeyboardButton(f"Сразу{chk(d,'malso','сразу')}", callback_data="mal_now"),
             InlineKeyboardButton(f"Завтра{chk(d,'malso','завтра')}", callback_data="mal_tomorrow"),
             InlineKeyboardButton(f"1-2 нед{chk(d,'malso','1-2 недели')}", callback_data="mal_2weeks"),
-            InlineKeyboardButton("Мальсо ↩", callback_data="mal_input"),
+            InlineKeyboardButton("Другое", callback_data="mal_input"),
         ],
+        # Город
+        [InlineKeyboardButton("✏️ Город", callback_data="edit_city")],
     ]
 
-    # Кнопка отправить — только когда всё заполнено
-    required = ["plate", "price", "keys", "condition", "kesanso", "medobi", "malso"]
+    # Отправить — только если всё заполнено
+    required = ["name", "plate", "price", "keys", "condition", "kesanso", "medobi", "malso", "city"]
     if all(d.get(k) for k in required):
         rows.append([InlineKeyboardButton("✅ Отправить", callback_data="send")])
 
     rows.append([InlineKeyboardButton("🔄 Заново", callback_data="restart")])
-    return InlineKeyboardMarkup(rows)
+    return text, InlineKeyboardMarkup(rows)
 
 async def refresh_form(ctx: ContextTypes.DEFAULT_TYPE):
+    text, kb = build_form(ctx.user_data)
     try:
         await ctx.bot.edit_message_text(
             chat_id=ctx.user_data["form_chat"],
             message_id=ctx.user_data["form_msg"],
-            text=build_form_text(ctx.user_data),
+            text=text,
             parse_mode="Markdown",
-            reply_markup=build_keyboard(ctx.user_data),
+            reply_markup=kb,
         )
     except Exception:
         pass
@@ -267,48 +254,20 @@ async def receive_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data.clear()
     ctx.user_data["url"] = msg_text
 
-    # Пробуем извлечь превью из сущностей сообщения (link preview text)
-    preview_text = ""
-    if update.message.entities:
-        for ent in update.message.entities:
-            if hasattr(ent, 'url') and ent.url:
-                preview_text = ent.url
-    # Telegram иногда передаёт текст превью через caption или text after URL
-    # Берём весь текст после первой строки (URL)
-    lines = msg_text.split('\n')
-    if len(lines) > 1:
-        preview_text = '\n'.join(lines[1:])
-
     match = re.search(r'/detail/(\d+)', msg_text)
     car_id = match.group(1) if match else None
 
-    processing_msg = await update.message.reply_text("⏳ Загружаю данные авто...")
+    wait_msg = await update.message.reply_text("⏳ Загружаю...")
 
-    # 1) Пробуем API
-    parsed = {}
-    if car_id:
-        parsed = await parse_encar_api(car_id)
-
-    # 2) Если API не дало — парсим превью текст
-    if (not parsed.get("name") or parsed.get("name") == "—") and preview_text:
-        from_preview = parse_preview_text(preview_text)
-        if from_preview.get("name") and from_preview["name"] != "—":
-            parsed["name"] = from_preview["name"]
-        if from_preview.get("city") and from_preview["city"] != "—":
-            parsed["city"] = from_preview["city"]
-
+    parsed = await parse_encar_api(car_id) if car_id else {}
     ctx.user_data["name"] = parsed.get("name", "—")
     ctx.user_data["city"] = parsed.get("city", "—")
 
-    await processing_msg.delete()
+    await wait_msg.delete()
 
-    # Показываем форму сразу
-    form_msg = await update.message.reply_text(
-        build_form_text(ctx.user_data),
-        parse_mode="Markdown",
-        reply_markup=build_keyboard(ctx.user_data),
-    )
-    ctx.user_data["form_msg"] = form_msg.message_id
+    text, kb = build_form(ctx.user_data)
+    form_msg = await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+    ctx.user_data["form_msg"]  = form_msg.message_id
     ctx.user_data["form_chat"] = form_msg.chat_id
     return FILLING
 
@@ -317,8 +276,7 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     d = query.data
 
-    # Сохраняем id формы
-    ctx.user_data["form_msg"] = query.message.message_id
+    ctx.user_data["form_msg"]  = query.message.message_id
     ctx.user_data["form_chat"] = query.message.chat_id
 
     if d == "restart":
@@ -333,36 +291,36 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("✅ Готово! Отправь новую ссылку.")
         return WAITING_LINK
 
-    # Простые кнопки
+    # Простые значения
     simple = {
-        "keys_1": ("keys", "1"), "keys_2": ("keys", "2"),
-        "cond_clean": ("condition", "чистая"), "cond_check": ("condition", "надо смотреть"),
+        "keys_1": ("keys", "1"),       "keys_2": ("keys", "2"),
+        "cond_clean": ("condition", "чистая"),
+        "cond_check": ("condition", "надо смотреть"),
         "kes_100": ("kesanso", "100%"), "kes_no": ("kesanso", "нет"),
         "med_440": ("medobi", "440000"), "med_450": ("medobi", "450000"),
         "med_330": ("medobi", "330000"),
-        "mal_now": ("malso", "сразу"), "mal_tomorrow": ("malso", "завтра"),
+        "mal_now": ("malso", "сразу"),  "mal_tomorrow": ("malso", "завтра"),
         "mal_2weeks": ("malso", "1-2 недели"),
     }
     if d in simple:
         key, val = simple[d]
         ctx.user_data[key] = val
+        text, kb = build_form(ctx.user_data)
         try:
-            await query.message.edit_text(
-                build_form_text(ctx.user_data),
-                parse_mode="Markdown",
-                reply_markup=build_keyboard(ctx.user_data),
-            )
+            await query.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
         except Exception:
             pass
         return FILLING
 
-    # Ввод текстом
+    # Текстовый ввод
     prompts = {
-        "edit_plate": ("plate_input", "Введи *номер авто* (например: 256수7232):"),
-        "edit_price": ("price_input", "Введи *цену* в вонах (например: 26500000):"),
-        "kes_input":  ("kesanso_input", "Введи сумму кесансо:"),
-        "med_input":  ("medobi_input", "Введи сумму медоби:"),
-        "mal_input":  ("malso_input", "Введи дату или срок мальсо:"),
+        "edit_name":  ("name_input",    "✏️ Введи *марку и модель* (например: BMW X5):"),
+        "edit_plate": ("plate_input",   "✏️ Введи *номер авто* (например: 256수7232):"),
+        "edit_price": ("price_input",   "✏️ Введи *цену* в вонах (например: 26500000):"),
+        "kes_input":  ("kesanso_input", "✏️ Введи сумму кесансо:"),
+        "med_input":  ("medobi_input",  "✏️ Введи сумму медоби:"),
+        "mal_input":  ("malso_input",   "✏️ Введи дату или срок мальсо:"),
+        "edit_city":  ("city_input",    "✏️ Введи *город* (например: Сувон):"),
     }
     if d in prompts:
         field, prompt = prompts[d]
@@ -373,15 +331,17 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return FILLING
 
 async def receive_text_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    val = (update.message.text or "").strip()
+    val   = (update.message.text or "").strip()
     field = ctx.user_data.get("waiting_for")
 
     field_map = {
+        "name_input":    "name",
         "plate_input":   "plate",
         "price_input":   "price",
         "kesanso_input": "kesanso",
         "medobi_input":  "medobi",
         "malso_input":   "malso",
+        "city_input":    "city",
     }
     if field in field_map:
         ctx.user_data[field_map[field]] = val
