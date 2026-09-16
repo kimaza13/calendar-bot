@@ -140,7 +140,7 @@ async def extract_fields_llm(text: str) -> dict:
 {{"name":"KIA K5","plate":"256수7232","price":"26500000","keys":"2","condition":"чистая","kesanso":"100%","medobi":"450000","malso":"сразу","city":"Сувон"}}"""
 
     response = await groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama3-70b-8192",
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
     )
@@ -558,7 +558,7 @@ async def car_fill_from_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         import asyncio
         fields = await asyncio.to_thread(
             lambda: groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="llama3-70b-8192",
                 messages=[{"role": "user", "content": f"""Из текста извлеки данные об автомобиле и верни ТОЛЬКО JSON.
 
 Текст: "{text}"
