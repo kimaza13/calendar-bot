@@ -594,12 +594,37 @@ async def car_fill_from_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cc = ctx.user_data.setdefault("cc", {})
     for key, val in parsed.items():
         if val and val != "null":
+            if key == "kesanso" and str(val).strip() == "100":
+                val = "100%"
             cc[key] = val
 
     form_text, kb = build_car_form(cc)
-    await msg_to_edit.edit_text(form_text, parse_mode="Markdown", reply_markup=kb)
-    ctx.user_data["cc_msg"]  = msg_to_edit.message_id
-    ctx.user_data["cc_chat"] = msg_to_edit.chat_id
+
+    # Удаляем временное сообщение
+    try:
+        await msg_to_edit.delete()
+    except Exception:
+        pass
+
+    # Обновляем исходную форму на месте
+    try:
+        await ctx.bot.edit_message_text(
+            chat_id=ctx.user_data["cc_chat"],
+            message_id=ctx.user_data["cc_msg"],
+            text=form_text,
+            parse_mode="Markdown",
+            reply_markup=kb,
+        )
+    except Exception:
+        new_msg = await ctx.bot.send_message(
+            chat_id=ctx.user_data["cc_chat"],
+            text=form_text,
+            parse_mode="Markdown",
+            reply_markup=kb,
+        )
+        ctx.user_data["cc_msg"]  = new_msg.message_id
+        ctx.user_data["cc_chat"] = new_msg.chat_id
+
     return FILLING
 
 # ── Car-check: кнопки ─────────────────────────────────────────────────────────
