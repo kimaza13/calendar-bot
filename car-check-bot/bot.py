@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_BOT_TOKEN"]
 GROQ_API_KEY      = os.environ["GROQ_API_KEY"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-GOOGLE_TOKEN_JSON = os.environ["GOOGLE_TOKEN_JSON"]
+GOOGLE_TOKEN_JSON = os.environ.get("GOOGLE_TOKEN_JSON", "")
 WEBHOOK_URL       = os.environ.get("WEBHOOK_URL", "")
 
 groq_client = groq.Groq(api_key=GROQ_API_KEY)
@@ -334,6 +334,8 @@ SYSTEM_PROMPT = """Ты умный универсальный ассистент
 {"intent":"translate","reply":"","data":{"text":"что переводить","target_lang":"korean|russian|english|uzbek"}}"""
 
 def get_calendar_service():
+    if not GOOGLE_TOKEN_JSON:
+        raise Exception("GOOGLE_TOKEN_JSON не настроен")
     token_data = json.loads(GOOGLE_TOKEN_JSON)
     creds = Credentials(
         token=token_data.get("token"),
