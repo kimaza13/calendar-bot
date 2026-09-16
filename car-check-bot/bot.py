@@ -248,7 +248,7 @@ def build_car_form(d: dict):
         [
             InlineKeyboardButton(f"440,000{dot(d,'medobi','440000')}", callback_data="cc_med_440"),
             InlineKeyboardButton(f"450,000{dot(d,'medobi','450000')}", callback_data="cc_med_450"),
-            InlineKeyboardButton(f"330,000{dot(d,'medobi','330000')}", callback_data="cc_med_330"),
+            InlineKeyboardButton(f"500,000{dot(d,'medobi','500000')}", callback_data="cc_med_500"),
             InlineKeyboardButton("Другое", callback_data="cc_med_input"),
         ],
         [
@@ -652,7 +652,7 @@ async def car_button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "cc_keys_1": ("keys","1"), "cc_keys_2": ("keys","2"),
         "cc_cond_clean": ("condition","чистая"), "cc_cond_check": ("condition","надо смотреть"),
         "cc_kes_100": ("kesanso","100%"), "cc_kes_no": ("kesanso","нет"),
-        "cc_med_440": ("medobi","440000"), "cc_med_450": ("medobi","450000"), "cc_med_330": ("medobi","330000"),
+        "cc_med_440": ("medobi","440000"), "cc_med_450": ("medobi","450000"), "cc_med_500": ("medobi","500000"),
         "cc_mal_now": ("malso","сразу"), "cc_mal_tomorrow": ("malso","завтра"), "cc_mal_2weeks": ("malso","1-2 недели"),
     }
     if d_key in simple:
