@@ -28,7 +28,7 @@ conversation_history = {}
 MAX_HISTORY = 10
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  CAR-CHECK: состояния ConversationHandler
+#  CAR-CHECK: состояния
 # ═══════════════════════════════════════════════════════════════════════════════
 FILLING, WAITING_TEXT_INPUT = range(2)
 
@@ -56,7 +56,6 @@ def translate_city(raw: str) -> str:
             return ru
     return raw.strip() or "—"
 
-# ── Марки/модели ──────────────────────────────────────────────────────────────
 BRAND_MAP = {
     "기아": "KIA", "현대": "Hyundai", "제네시스": "Genesis",
     "쉐보레": "Chevrolet", "르노": "Renault", "삼성": "Samsung",
@@ -95,7 +94,6 @@ async def parse_encar_api(car_id: str) -> dict:
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
         "Accept": "application/json",
-        "Accept-Language": "ko-KR,ko;q=0.9",
         "Referer": f"https://fem.encar.com/cars/detail/{car_id}",
     }
     try:
@@ -118,7 +116,49 @@ async def parse_encar_api(car_id: str) -> dict:
         pass
     return {}
 
-# ── Car-check: форматирование ─────────────────────────────────────────────────
+# ── Извлечение полей через LLM ────────────────────────────────────────────────
+async def extract_fields_llm(text: str) -> dict:
+    prompt = f"""Из текста извлеки данные об автомобиле и верни ТОЛЬКО JSON.
+
+Текст: "{text}"
+
+Поля:
+- name: марка и модель (например "KIA K5", "BMW X5"). Если не упомянуто — null
+- plate: номерной знак. Корейские номера: 3 цифры + слог + 4 цифры.
+  Числительные: 영/공=0,일=1,이=2,삼=3,사=4,오=5,육=6,칠=7,팔=8,구=9
+  Слоги (русские): бо→보,со→소,га→가,на→나,да→다,ра→라,ма→마,па→바,са→사,а→아,жа→자,ча→차,ха→하
+  Если не упомянуто — null
+- price: цена в вонах, только цифры (например "26500000"). Если не упомянута — null
+- keys: количество ключей "1" или "2". Если не упомянуто — null
+- condition: "чистая" или описание повреждений + "надо смотреть". Если не упомянуто — null
+- kesanso: "100%" или "нет" или сумма. Если не упомянуто — null
+- medobi: медоби только цифры (например "440000"). Если не упомянуто — null
+- malso: "сразу", "завтра", "послезавтра", "1-2 недели" или дата. Если не упомянуто — null
+- city: город на русском. Если не упомянуто — null
+
+Верни строго JSON:
+{{"name":"KIA K5","plate":"256수7232","price":"26500000","keys":"2","condition":"чистая","kesanso":"100%","medobi":"450000","malso":"сразу","city":"Сувон"}}"""
+
+    response = await groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+    )
+    raw = response.choices[0].message.content.strip()
+    raw = re.sub(r"```json|```", "", raw).strip()
+    return json.loads(raw)
+
+# ── Транскрипция ──────────────────────────────────────────────────────────────
+async def transcribe(file_path: str, lang: str = "ru") -> str:
+    with open(file_path, "rb") as f:
+        result = groq_client.audio.transcriptions.create(
+            file=(os.path.basename(file_path), f),
+            model="whisper-large-v3",
+            language=lang,
+        )
+    return result.text.strip()
+
+# ── Форматирование ────────────────────────────────────────────────────────────
 def fmt_money(val: str) -> str:
     if not val or val in ("—", "нет"):
         return val or "—"
@@ -163,8 +203,8 @@ def format_car_card(d: dict) -> str:
         "⚠️ Перед осмотром обязательно связаться с дилером",
     ])
 
-# ── Car-check: форма с кнопками ───────────────────────────────────────────────
-def fval(d, key, fmt=False):
+# ── Форма ─────────────────────────────────────────────────────────────────────
+def fv(d, key, fmt=False):
     v = d.get(key)
     if not v or v == "—":
         return "—"
@@ -175,27 +215,20 @@ def dot(d, key, target):
 
 def build_car_form(d: dict):
     text = (
-        f"🚗 *Марка и модель:* {fval(d,'name')}\n"
-        f"🔢 *Номер:* `{fval(d,'plate')}`\n"
-        f"💵 *Цена:* `{fmt_money(fval(d,'price'))}`\n"
-        f"🔑 *Ключи:* {fval(d,'keys')}\n"
-        f"🚘 *Состояние:* {fval(d,'condition')}\n"
-        f"📋 *Кесансо:* {fmt_money(fval(d,'kesanso'))}\n"
-        f"💰 *Медоби:* {fmt_money(fval(d,'medobi'))}\n"
-        f"📅 *Мальсо:* {fval(d,'malso')}\n"
-        f"📍 *Город:* {fval(d,'city')}"
+        f"🚗 *Марка и модель:* {fv(d,'name')}\n"
+        f"🔢 *Номер:* `{fv(d,'plate')}`\n"
+        f"💵 *Цена:* `{fmt_money(fv(d,'price'))}`\n"
+        f"🔑 *Ключи:* {fv(d,'keys')}\n"
+        f"🚘 *Состояние:* {fv(d,'condition')}\n"
+        f"📋 *Кесансо:* {fmt_money(fv(d,'kesanso'))}\n"
+        f"💰 *Медоби:* {fmt_money(fv(d,'medobi'))}\n"
+        f"📅 *Мальсо:* {fv(d,'malso')}\n"
+        f"📍 *Город:* {fv(d,'city')}"
     )
-
     rows = [
-        [InlineKeyboardButton(
-            f"🚗 Марка и модель{' ✅' if d.get('name') and d.get('name') != '—' else ' ✏️'}",
-            callback_data="cc_edit_name")],
-        [InlineKeyboardButton(
-            f"🔢 Номер авто{' ✅' if d.get('plate') else ' ✏️'}",
-            callback_data="cc_edit_plate")],
-        [InlineKeyboardButton(
-            f"💵 Цена{' ✅' if d.get('price') else ' ✏️'}",
-            callback_data="cc_edit_price")],
+        [InlineKeyboardButton(f"🚗 Марка и модель{' ✅' if d.get('name') and d.get('name') != '—' else ' ✏️'}", callback_data="cc_edit_name")],
+        [InlineKeyboardButton(f"🔢 Номер авто{' ✅' if d.get('plate') else ' ✏️'}", callback_data="cc_edit_plate")],
+        [InlineKeyboardButton(f"💵 Цена{' ✅' if d.get('price') else ' ✏️'}", callback_data="cc_edit_price")],
         [
             InlineKeyboardButton(f"🔑 1{dot(d,'keys','1')}", callback_data="cc_keys_1"),
             InlineKeyboardButton(f"🔑 2{dot(d,'keys','2')}", callback_data="cc_keys_2"),
@@ -221,16 +254,12 @@ def build_car_form(d: dict):
             InlineKeyboardButton(f"1-2 нед{dot(d,'malso','1-2 недели')}", callback_data="cc_mal_2weeks"),
             InlineKeyboardButton("Другое", callback_data="cc_mal_input"),
         ],
-        [InlineKeyboardButton(
-            f"📍 Город{' ✅' if d.get('city') and d.get('city') != '—' else ' ✏️'}",
-            callback_data="cc_edit_city")],
+        [InlineKeyboardButton(f"📍 Город{' ✅' if d.get('city') and d.get('city') != '—' else ' ✏️'}", callback_data="cc_edit_city")],
     ]
-
     required = ["name", "plate", "price", "keys", "condition", "kesanso", "medobi", "malso", "city"]
     if all(d.get(k) and d.get(k) != "—" for k in required):
         rows.append([InlineKeyboardButton("✅ Отправить", callback_data="cc_send")])
     rows.append([InlineKeyboardButton("❌ Отмена", callback_data="cc_cancel")])
-
     return text, InlineKeyboardMarkup(rows)
 
 async def refresh_car_form(ctx: ContextTypes.DEFAULT_TYPE):
@@ -239,15 +268,13 @@ async def refresh_car_form(ctx: ContextTypes.DEFAULT_TYPE):
         await ctx.bot.edit_message_text(
             chat_id=ctx.user_data["cc_chat"],
             message_id=ctx.user_data["cc_msg"],
-            text=text,
-            parse_mode="Markdown",
-            reply_markup=kb,
+            text=text, parse_mode="Markdown", reply_markup=kb,
         )
     except Exception:
         pass
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  ASSISTANT: вспомогательные функции
+#  ASSISTANT
 # ═══════════════════════════════════════════════════════════════════════════════
 async def get_exchange_rates() -> dict:
     try:
@@ -261,77 +288,38 @@ async def get_exchange_rates() -> dict:
     except Exception:
         return {"usd_krw": 1350, "usd_rub": 1380, "eur_rub": 1500}
 
-SYSTEM_PROMPT = """Ты умный универсальный ассистент. Умеешь отвечать на любые вопросы, а также специализируешься на экспорте автомобилей из Кореи в СНГ.
+SYSTEM_PROMPT = """Ты умный универсальный ассистент. Специализируешься на экспорте автомобилей из Кореи в СНГ.
 Анализируй запрос и отвечай ТОЛЬКО валидным JSON без markdown.
 
 === 1. КАЛЬКУЛЯТОР ИМПОРТА в Россию (физлицо) ===
-Курсы: $1=1380р, $1=1350 вон, 1 евро=1500р
+ТАМОЖНЯ (физлицо, ЕТС) — берётся МАКСИМУМ из процентной ставки и минимальной ставки за см³:
+До 3 лет: до 8500€: макс(54%,2.5€×см³) | 8500-16700€: макс(48%,3.5€×см³) | >16700€: макс(48%,5.5€×см³)
+3-7 лет: макс(48%,3.5€×см³)
+Старше 7 лет: до1000см³:1.4€ | 1000-1500:1.5€ | 1500-1800:1.7€ | 1800-2300:2.5€ | 2300-3000:2.7€ | >3000:3.0€
++ оформление 4924₽
+УТИЛЬСБОР физлицо: до3лет и 3-5лет: <1000см³:5200₽ | 1000-2000:54800₽ | >2000:112600₽
+Старше 5лет: <1000:5200₽ | 1000-2000:112600₽ | >2000:169000₽
+Фикс: брокер25000+логистика150000+услуги100000=275000₽
+{"intent":"calc","reply":"итог","data":{"car":"","price_krw":0,"price_rub":0,"price_eur":0,"customs_rub":0,"util_rub":0,"total_rub":0,"usd_krw":0,"usd_rub":0,"eur_rub":0}}
 
-ТАМОЖНЯ (физлицо, ЕТС):
-Берётся МАКСИМУМ из двух значений: процентная ставка И минимальная ставка за см³.
-
-До 3 лет:
-- до 8500 евро: макс(54% от цены_евро, 2.5€×см³)
-- 8500-16700 евро: макс(48% от цены_евро, 3.5€×см³)
-- свыше 16700 евро: макс(48% от цены_евро, 5.5€×см³)
-
-3-5 лет: макс(48% от цены_евро, 3.5€×см³)
-5-7 лет: макс(48% от цены_евро, 3.5€×см³)
-старше 7 лет (зависит от объёма):
-- до 1000см³: макс(48% от цены_евро, 1.4€×см³)
-- 1000-1500см³: макс(48% от цены_евро, 1.5€×см³)
-- 1500-1800см³: макс(48% от цены_евро, 1.7€×см³)
-- 1800-2300см³: макс(48% от цены_евро, 2.5€×см³)
-- 2300-3000см³: макс(48% от цены_евро, 2.7€×см³)
-- свыше 3000см³: макс(48% от цены_евро, 3.0€×см³)
-
-Плюс таможенное оформление: 4924₽ (фиксировано)
-
-УТИЛЬСБОР (физлицо, первая машина):
-до 3 лет: 20000 × коэффициент
-- до 1000см³: 20000 × 0.26 = 5200₽
-- 1000-2000см³: 20000 × 2.74 = 54800₽
-- свыше 2000см³: 20000 × 5.63 = 112600₽
-
-3-5 лет: 20000 × коэффициент
-- до 1000см³: 20000 × 0.26 = 5200₽
-- 1000-2000см³: 20000 × 2.74 = 54800₽
-- свыше 2000см³: 20000 × 5.63 = 112600₽
-
-старше 5 лет: 20000 × коэффициент
-- до 1000см³: 20000 × 0.26 = 5200₽
-- 1000-2000см³: 20000 × 5.63 = 112600₽
-- свыше 2000см³: 20000 × 8.45 = 169000₽
-
-Фиксированные: брокер 25000р + логистика 150000р + услуги 100000р = 275000р
-Итого = цена_руб + таможня + утилсбор + 275000
-
-Формат ответа:
-{"intent":"calc","reply":"итог текстом","data":{"car":"название","price_krw":число,"price_rub":число,"price_eur":число,"customs_rub":число,"util_rub":число,"broker_rub":25000,"logistics_rub":150000,"service_rub":100000,"total_rub":число,"usd_krw":число,"usd_rub":число,"eur_rub":число}}
-
-Если запрос содержит цену авто И расходы по Корее (фрахт) — используй intent "full_calc":
-{"intent":"full_calc","reply":"итог","data":{"car":"название","year":число,"age":"new|3-5|5-7|7+","engine_cc":число,"engine_type":"бензин|дизель|гибрид|электро","price_krw":число,"korea_expenses_krw":число,"total_krw":число,"price_usd":число,"price_rub":число,"customs_rub":число,"util_rub":число,"delivery_msk_rub":число,"usd_krw":число,"usd_rub":число,"eur_rub":число}}
-ВАЖНО: delivery_msk_rub = 0 если пользователь не назвал сумму доставки до Москвы явно.
-
-Если не хватает данных для full_calc (нет объёма или возраста) — используй intent "clarify".
+Если есть цена И расходы по Корее:
+{"intent":"full_calc","reply":"итог","data":{"car":"","age":"new|3-5|5-7|7+","engine_cc":0,"engine_type":"бензин","price_krw":0,"korea_expenses_krw":0,"total_krw":0,"customs_rub":0,"util_rub":0,"delivery_msk_rub":0,"usd_krw":0,"usd_rub":0,"eur_rub":0}}
 
 === 2. КАРТОЧКА ДИЛЕРА ===
-Когда называют цену авто, медоби, торг и залог — считай остаток дилеру.
-Формула: остаток_база = цена - залог - торг, итого = остаток_база + медоби
-{"intent":"dealer","reply":"карточка готова","data":{"car":"название если есть","price_krw":число,"medobi_krw":число,"torg_krw":число,"zalog_krw":число}}
+{"intent":"dealer","reply":"","data":{"car":"","price_krw":0,"medobi_krw":0,"torg_krw":0,"zalog_krw":0}}
 
 === 3. КАЛЕНДАРЬ ===
-Сегодня: {today}, день недели: {weekday}.
-{"intent":"calendar","reply":"подтверждение","data":{"title":"название","date":"YYYY-MM-DD","time":"HH:MM","duration_hours":1}}
+Сегодня: {today}, день: {weekday}.
+{"intent":"calendar","reply":"","data":{"title":"","date":"YYYY-MM-DD","time":"HH:MM","duration_hours":1}}
 
-=== 4. УТОЧНЕНИЕ ===
-{"intent":"clarify","reply":"какой вопрос задать"}
+=== 4. ПЕРЕВОДЧИК ===
+{"intent":"translate","reply":"","data":{"text":"","target_lang":"korean|russian|english|uzbek"}}
 
-=== 5. ЧАТ ===
-{"intent":"chat","reply":"ответ"}
+=== 5. УТОЧНЕНИЕ ===
+{"intent":"clarify","reply":"вопрос"}
 
-=== 6. ПЕРЕВОДЧИК ===
-{"intent":"translate","reply":"","data":{"text":"что переводить","target_lang":"korean|russian|english|uzbek"}}"""
+=== 6. ЧАТ ===
+{"intent":"chat","reply":"ответ"}"""
 
 def get_calendar_service():
     if not GOOGLE_TOKEN_JSON:
@@ -347,71 +335,41 @@ def get_calendar_service():
     )
     return build("calendar", "v3", credentials=creds)
 
-async def transcribe_voice(file_path: str) -> str:
-    with open(file_path, "rb") as f:
-        result = groq_client.audio.transcriptions.create(
-            file=("voice.ogg", f),
-            model="whisper-large-v3",
-            language="ru",
-        )
-    return result.text.strip()
-
-def calculate_customs(price_krw, engine_cc, age, engine_type, rates) -> dict:
-    usd_krw = rates["usd_krw"]
-    usd_rub = rates["usd_rub"]
-    eur_rub = rates["eur_rub"]
-    price_usd = price_krw / usd_krw
+def calculate_customs(price_krw, engine_cc, age, rates) -> dict:
+    price_usd = price_krw / rates["usd_krw"]
     price_eur = price_usd / 1.09
-
+    eur_rub   = rates["eur_rub"]
     if age == "new":
-        rate_eur = 2.5 if price_eur <= 8500 else (3.5 if price_eur <= 16700 else 5.5)
+        rate = 2.5 if price_eur <= 8500 else (3.5 if price_eur <= 16700 else 5.5)
     elif age in ["3-5", "5-7"]:
-        rate_eur = 2.5
+        rate = 3.5
     else:
-        if engine_cc <= 1000: rate_eur = 1.4
-        elif engine_cc <= 1500: rate_eur = 1.5
-        elif engine_cc <= 1800: rate_eur = 1.7
-        elif engine_cc <= 2300: rate_eur = 2.5
-        elif engine_cc <= 3000: rate_eur = 2.7
-        else: rate_eur = 3.0
-
-    customs = round(rate_eur * engine_cc * eur_rub + 4924)
-    util = 5200
-    return {
-        "customs_rub": customs, "util_rub": util,
-        "price_usd": round(price_usd),
-        "price_rub": round(price_usd * usd_rub),
-        "price_eur": round(price_eur),
-    }
+        if engine_cc <= 1000: rate = 1.4
+        elif engine_cc <= 1500: rate = 1.5
+        elif engine_cc <= 1800: rate = 1.7
+        elif engine_cc <= 2300: rate = 2.5
+        elif engine_cc <= 3000: rate = 2.7
+        else: rate = 3.0
+    customs = round(rate * engine_cc * eur_rub + 4924)
+    return {"customs_rub": customs, "price_usd": round(price_usd),
+            "price_rub": round(price_usd * rates["usd_rub"]), "price_eur": round(price_eur)}
 
 async def ask_claude(user_message: str, chat_id: int) -> dict:
     now = datetime.now()
-    weekdays = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
+    weekdays = ["понедельник","вторник","среда","четверг","пятница","суббота","воскресенье"]
     system = SYSTEM_PROMPT.replace("{today}", now.strftime("%d.%m.%Y")).replace("{weekday}", weekdays[now.weekday()])
-
     if chat_id not in conversation_history:
         conversation_history[chat_id] = []
     conversation_history[chat_id].append({"role": "user", "content": user_message})
     if len(conversation_history[chat_id]) > MAX_HISTORY * 2:
         conversation_history[chat_id] = conversation_history[chat_id][-MAX_HISTORY * 2:]
-
     rates = await get_exchange_rates()
-    system += f"\n\nАКТУАЛЬНЫЕ КУРСЫ: $1={rates['usd_krw']:.0f}₩, $1={rates['usd_rub']:.2f}₽, €1={rates['eur_rub']:.2f}₽"
-
+    system += f"\n\nАКТУАЛЬНЫЕ КУРСЫ: $1={rates['usd_krw']:.0f}₩ | $1={rates['usd_rub']:.2f}₽ | €1={rates['eur_rub']:.2f}₽"
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 1024,
-                "system": system,
-                "messages": conversation_history[chat_id],
-            },
+            headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 1024, "system": system, "messages": conversation_history[chat_id]},
         )
         data = resp.json()
         if "error" in data:
@@ -425,146 +383,113 @@ async def ask_claude(user_message: str, chat_id: int) -> dict:
         conversation_history[chat_id].append({"role": "assistant", "content": raw})
         return parsed
 
-def create_calendar_event(title, date, time, duration_hours=1) -> str:
-    service = get_calendar_service()
-    start_dt = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
-    end_dt = start_dt + timedelta(hours=duration_hours)
-    event = {
-        "summary": title,
-        "start": {"dateTime": start_dt.isoformat(), "timeZone": "Asia/Seoul"},
-        "end":   {"dateTime": end_dt.isoformat(),   "timeZone": "Asia/Seoul"},
-        "reminders": {"useDefault": False, "overrides": [{"method": "popup", "minutes": 15}]},
-    }
-    result = service.events().insert(calendarId="primary", body=event).execute()
-    return result.get("htmlLink", "")
-
 def fmt(n):
     return f"{int(n):,}".replace(",", " ")
 
-def format_calc_result(data: dict) -> str:
+def format_calc(data: dict) -> str:
     return "\n".join([
         f"🚗 *{data.get('car','Авто')}*", "",
-        f"📊 *Курсы:* $1={data.get('usd_krw',1350):.0f}₩ | $1={data.get('usd_rub',1380):.2f}₽ | €1={data.get('eur_rub',1500):.2f}₽", "",
+        f"📊 $1={data.get('usd_krw',1350):.0f}₩ | $1={data.get('usd_rub',1380):.2f}₽ | €1={data.get('eur_rub',1500):.2f}₽", "",
         f"💰 Цена: {fmt(data.get('price_krw',0))}₩ → {fmt(data.get('price_rub',0))}₽",
         f"🛃 Таможня: {fmt(data.get('customs_rub',0))}₽",
         f"♻️ Утильсбор: {fmt(data.get('util_rub',0))}₽",
-        f"📋 Брокер: 25 000₽",
-        f"🚢 Логистика: 150 000₽",
-        f"🏢 Услуги: 100 000₽", "",
+        f"📋 Брокер: 25 000₽  🚢 Логистика: 150 000₽  🏢 Услуги: 100 000₽", "",
         f"✅ *Итого: {fmt(data.get('total_rub',0))}₽*",
     ])
 
 def format_full_calc(data: dict) -> str:
-    price_krw  = data.get("price_krw", 0)
-    korea_exp  = data.get("korea_expenses_krw", 0)
-    total_krw  = price_krw + korea_exp
-    usd_krw    = data.get("usd_krw", 1350)
-    usd_rub    = data.get("usd_rub", 1380)
-    eur_rub    = data.get("eur_rub", 1500)
-    total_usd  = round(total_krw / usd_krw)
-    total_rub  = round(total_usd * usd_rub)
-    customs    = data.get("customs_rub", 0)
-    util       = data.get("util_rub", 0)
-    broker     = 110000
-    contract   = 100000
-    delivery   = data.get("delivery_msk_rub", 0)
+    price_krw = data.get("price_krw", 0)
+    korea_exp = data.get("korea_expenses_krw", 0)
+    total_krw = price_krw + korea_exp
+    usd_krw   = data.get("usd_krw", 1350)
+    usd_rub   = data.get("usd_rub", 1380)
+    eur_rub   = data.get("eur_rub", 1500)
+    total_usd = round(total_krw / usd_krw)
+    total_rub = round(total_usd * usd_rub)
+    customs   = data.get("customs_rub", 0)
+    util      = data.get("util_rub", 0)
+    broker    = 110000; contract = 100000
+    delivery  = data.get("delivery_msk_rub", 0)
     total_vldk = total_rub + customs + util + broker + contract
-    total_msk  = total_vldk + delivery
     lines = [
         f"🚗 *{data.get('car','Авто')}*", "",
         f"📊 $1={usd_krw:.0f}₩ | $1={usd_rub:.2f}₽ | €1={eur_rub:.2f}₽", "",
-        f"🇰🇷 *Корея*",
-        f"Цена: {fmt(price_krw)}₩",
-        f"Расходы+фрахт: {fmt(korea_exp)}₩",
-        f"Итого KRW: {fmt(total_krw)}₩ → ${fmt(total_usd)} → {fmt(total_rub)}₽", "",
-        f"🇷🇺 *Россия*",
-        f"Таможня: {fmt(customs)}₽",
-        f"Утильсбор: {fmt(util)}₽",
-        f"Брокер: {fmt(broker)}₽",
-        f"Договор: {fmt(contract)}₽", "",
+        f"🇰🇷 Цена: {fmt(price_krw)}₩ | Расходы: {fmt(korea_exp)}₩ | Итого: {fmt(total_krw)}₩ → {fmt(total_rub)}₽", "",
+        f"🇷🇺 Таможня: {fmt(customs)}₽ | Утильсбор: {fmt(util)}₽ | Брокер: {fmt(broker)}₽ | Договор: {fmt(contract)}₽", "",
         f"📦 *Total ВДК: {fmt(total_vldk)}₽*",
     ]
     if delivery > 0:
-        lines += [f"🚛 Доставка→МСК: {fmt(delivery)}₽", f"🏁 *Total МСК: {fmt(total_msk)}₽*"]
+        lines += [f"🚛 Доставка→МСК: {fmt(delivery)}₽", f"🏁 *Total МСК: {fmt(total_vldk+delivery)}₽*"]
     return "\n".join(lines)
 
-def format_dealer_card(data: dict) -> str:
-    price    = data["price_krw"]
-    medobi   = data["medobi_krw"]
-    torg     = data["torg_krw"]
-    zalog    = data["zalog_krw"]
-    ostatok  = price - zalog - torg
-    total    = ostatok + medobi
+def format_dealer(data: dict) -> str:
+    price = data["price_krw"]; medobi = data["medobi_krw"]
+    torg  = data["torg_krw"];  zalog  = data["zalog_krw"]
+    ostatok = price - zalog - torg
     return "\n".join([
         f"💵 *Расчёт с дилером*", "",
-        f"Цена: {fmt(price)}₩",
-        f"Медоби: {fmt(medobi)}₩",
-        f"Торг: {fmt(torg)}₩",
-        f"Залог: {fmt(zalog)}₩", "",
-        f"*Остаток: {fmt(ostatok)} + {fmt(medobi)} = {fmt(total)}₩*",
+        f"Цена: {fmt(price)}₩ | Медоби: {fmt(medobi)}₩ | Торг: {fmt(torg)}₩ | Залог: {fmt(zalog)}₩", "",
+        f"*Остаток: {fmt(ostatok)} + {fmt(medobi)} = {fmt(ostatok+medobi)}₩*",
     ])
 
-async def process_assistant_message(update: Update, text: str):
+async def process_assistant(update: Update, text: str):
     try:
         result = await ask_claude(text, update.message.chat_id)
-        intent = result.get("intent")
-        reply  = result.get("reply", "")
-        data   = result.get("data", {})
+        intent = result.get("intent"); reply = result.get("reply", ""); data = result.get("data", {})
 
         if intent == "calc":
             rates = await get_exchange_rates()
-            calc  = calculate_customs(data.get("price_krw",0), data.get("engine_cc",1600), data.get("age","3-5"), data.get("engine_type","бензин"), rates)
-            data.update(calc)
-            data.update({"usd_krw": rates["usd_krw"], "usd_rub": rates["usd_rub"], "eur_rub": rates["eur_rub"]})
-            await update.message.reply_text(format_calc_result(data), parse_mode="Markdown")
+            calc  = calculate_customs(data.get("price_krw",0), data.get("engine_cc",1600), data.get("age","3-5"), rates)
+            data.update(calc); data.update(rates)
+            await update.message.reply_text(format_calc(data), parse_mode="Markdown")
 
         elif intent == "full_calc":
             rates = await get_exchange_rates()
-            calc  = calculate_customs(data.get("total_krw", data.get("price_krw",0)), data.get("engine_cc",1600), data.get("age","3-5"), data.get("engine_type","бензин"), rates)
-            data.update(calc)
-            data.update({"usd_krw": rates["usd_krw"], "usd_rub": rates["usd_rub"], "eur_rub": rates["eur_rub"]})
+            calc  = calculate_customs(data.get("total_krw", data.get("price_krw",0)), data.get("engine_cc",1600), data.get("age","3-5"), rates)
+            data.update(calc); data.update(rates)
             await update.message.reply_text(format_full_calc(data), parse_mode="Markdown")
 
         elif intent == "dealer":
-            await update.message.reply_text(format_dealer_card(data), parse_mode="Markdown")
+            await update.message.reply_text(format_dealer(data), parse_mode="Markdown")
 
         elif intent == "calendar":
             try:
-                create_calendar_event(data["title"], data["date"], data["time"], data.get("duration_hours", 1))
-                now = datetime.now()
+                service   = get_calendar_service()
+                start_dt  = datetime.strptime(f"{data['date']} {data['time']}", "%Y-%m-%d %H:%M")
+                end_dt    = start_dt + timedelta(hours=data.get("duration_hours", 1))
+                event     = {"summary": data["title"],
+                             "start": {"dateTime": start_dt.isoformat(), "timeZone": "Asia/Seoul"},
+                             "end":   {"dateTime": end_dt.isoformat(),   "timeZone": "Asia/Seoul"},
+                             "reminders": {"useDefault": False, "overrides": [{"method": "popup", "minutes": 15}]}}
+                service.events().insert(calendarId="primary", body=event).execute()
                 weekdays = ["пн","вт","ср","чт","пт","сб","вс"]
                 dt = datetime.strptime(f"{data['date']} {data['time']}", "%Y-%m-%d %H:%M")
-                date_fmt = f"{dt.strftime('%d.%m.%Y')} ({weekdays[dt.weekday()]})"
-                await update.message.reply_text(f"📅 *{data['title']}*\n🕐 {date_fmt} в {data['time']}\n\n✅ Добавлено в календарь", parse_mode="Markdown")
+                await update.message.reply_text(
+                    f"📅 *{data['title']}*\n🕐 {dt.strftime('%d.%m.%Y')} ({weekdays[dt.weekday()]}) в {data['time']}\n\n✅ Добавлено в календарь",
+                    parse_mode="Markdown")
             except Exception as e:
                 await update.message.reply_text(f"❌ Ошибка календаря: {e}")
 
         elif intent == "translate":
-            lang_prompts = {
-                "korean": "корейский язык. Используй естественный стиль как носитель. Уровень вежливости 해요체 для нейтрального, 합쇼체 для делового.",
-                "russian": "русский язык. Переводи естественно.",
-                "english": "английский язык. Переводи естественно.",
-                "uzbek": "узбекский язык. Переводи естественно.",
-            }
             target = data.get("target_lang", "korean")
+            lang_prompts = {
+                "korean": "корейский, стиль 해요체 для нейтрального",
+                "russian": "русский, естественно", "english": "английский", "uzbek": "узбекский",
+            }
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                    json={
-                        "model": "claude-haiku-4-5-20251001",
-                        "max_tokens": 1024,
-                        "system": "Ты профессиональный переводчик. Только перевод, без пояснений.",
-                        "messages": [{"role": "user", "content": f"Переведи на {lang_prompts.get(target, target)}:\n\n{data.get('text','')}"}],
-                    },
+                    json={"model": "claude-haiku-4-5-20251001", "max_tokens": 1024,
+                          "system": "Только перевод, без пояснений.",
+                          "messages": [{"role": "user", "content": f"Переведи на {lang_prompts.get(target,target)}:\n\n{data.get('text','')}"}]},
                 )
                 translated = resp.json()["content"][0]["text"].strip()
-            flags = {"korean": "🇰🇷", "russian": "🇷🇺", "english": "🇺🇸", "uzbek": "🇺🇿"}
+            flags = {"korean":"🇰🇷","russian":"🇷🇺","english":"🇺🇸","uzbek":"🇺🇿"}
             await update.message.reply_text(f"{flags.get(target,'🌐')} {translated}")
 
         elif intent == "clarify":
             await update.message.reply_text(f"🤔 {reply}")
-
         else:
             await update.message.reply_text(reply)
 
@@ -578,45 +503,105 @@ async def process_assistant_message(update: Update, text: str):
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я твой ассистент.\n\n"
-        "🚗 Отправь ссылку Энкар → заполним карточку авто\n"
-        "💰 Спроси расчёт таможни или стоимости авто\n"
-        "📅 Добавлю встречу в календарь\n"
+        "🚗 Ссылка Энкар → карточка авто\n"
+        "💰 Расчёт таможни и стоимости\n"
+        "📅 Добавлю в календарь\n"
         "🌐 Переведу текст\n"
-        "💬 Отвечу на любой вопрос"
+        "💬 Отвечу на вопросы"
     )
 
 async def cmd_reset(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    if chat_id in conversation_history:
-        conversation_history[chat_id] = []
-    await update.message.reply_text("🔄 История диалога очищена")
+    conversation_history.pop(update.message.chat_id, None)
+    await update.message.reply_text("🔄 История очищена")
 
-# ── Car-check: запуск формы при получении ссылки Энкар ───────────────────────
+# ── Car-check: ссылка ─────────────────────────────────────────────────────────
 async def handle_encar_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     url = (update.message.text or "").strip()
     ctx.user_data["cc"] = {"url": url}
-
     match = re.search(r'/detail/(\d+)', url)
     car_id = match.group(1) if match else None
-
     wait_msg = await update.message.reply_text("⏳ Загружаю данные авто...")
     parsed = await parse_encar_api(car_id) if car_id else {}
     ctx.user_data["cc"]["name"] = parsed.get("name", "—")
     ctx.user_data["cc"]["city"] = parsed.get("city", "—")
     await wait_msg.delete()
-
     text, kb = build_car_form(ctx.user_data["cc"])
-    form_msg = await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+    form_msg = await update.message.reply_text(
+        text + "\n\n_Или отправь голосовое/текст со всеми данными сразу_ 🎤",
+        parse_mode="Markdown", reply_markup=kb
+    )
     ctx.user_data["cc_msg"]  = form_msg.message_id
     ctx.user_data["cc_chat"] = form_msg.chat_id
     return FILLING
 
-# ── Car-check: кнопки ────────────────────────────────────────────────────────
+# ── Car-check: текст/голос заполняет всю форму сразу ─────────────────────────
+async def car_fill_from_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Текст или голосовое — заполняем форму через LLM."""
+    # Если ждём конкретный ввод (редактирование поля) — не перехватываем
+    if ctx.user_data.get("cc_waiting"):
+        return await car_text_input(update, ctx)
+
+    if update.message.voice:
+        wait_msg = await update.message.reply_text("⏳ Распознаю голосовое...")
+        file = await update.message.voice.get_file()
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            await file.download_to_drive(tmp.name)
+            text = await transcribe(tmp.name, "ru")
+        os.remove(tmp.name)
+        await wait_msg.edit_text(f"🎤 _{text}_\n\n⏳ Заполняю форму...", parse_mode="Markdown")
+        msg_to_edit = wait_msg
+    else:
+        text = (update.message.text or "").strip()
+        msg_to_edit = await update.message.reply_text("⏳ Заполняю форму...")
+
+    try:
+        import asyncio
+        fields = await asyncio.to_thread(
+            lambda: groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": f"""Из текста извлеки данные об автомобиле и верни ТОЛЬКО JSON.
+
+Текст: "{text}"
+
+Поля (null если не упомянуто):
+- name: марка и модель
+- plate: номерной знак (корейский формат)
+- price: цена в вонах только цифры
+- keys: "1" или "2"
+- condition: "чистая" или описание + "надо смотреть"
+- kesanso: "100%" или "нет" или сумма
+- medobi: только цифры
+- malso: "сразу"/"завтра"/"послезавтра"/"1-2 недели"/дата
+- city: город на русском
+
+{{"name":null,"plate":null,"price":null,"keys":null,"condition":null,"kesanso":null,"medobi":null,"malso":null,"city":null}}"""}],
+                temperature=0,
+            )
+        )
+        raw = fields.choices[0].message.content.strip()
+        raw = re.sub(r"```json|```", "", raw).strip()
+        parsed = json.loads(raw)
+    except Exception as e:
+        await msg_to_edit.edit_text(f"❌ Не смог разобрать: {e}")
+        return FILLING
+
+    # Обновляем только непустые поля
+    cc = ctx.user_data.setdefault("cc", {})
+    for key, val in parsed.items():
+        if val and val != "null":
+            cc[key] = val
+
+    form_text, kb = build_car_form(cc)
+    await msg_to_edit.edit_text(form_text, parse_mode="Markdown", reply_markup=kb)
+    ctx.user_data["cc_msg"]  = msg_to_edit.message_id
+    ctx.user_data["cc_chat"] = msg_to_edit.chat_id
+    return FILLING
+
+# ── Car-check: кнопки ─────────────────────────────────────────────────────────
 async def car_button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     d_key = query.data
-
     ctx.user_data["cc_msg"]  = query.message.message_id
     ctx.user_data["cc_chat"] = query.message.chat_id
     cc = ctx.user_data.setdefault("cc", {})
@@ -630,18 +615,15 @@ async def car_button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         card = format_car_card(cc)
         await query.message.reply_text(card)
         ctx.user_data.pop("cc", None)
-        await query.message.reply_text("✅ Готово! Можешь отправить новую ссылку или задать вопрос.")
+        await query.message.reply_text("✅ Готово! Отправь новую ссылку или задай вопрос.")
         return ConversationHandler.END
 
     simple = {
-        "cc_keys_1": ("keys", "1"),      "cc_keys_2": ("keys", "2"),
-        "cc_cond_clean": ("condition", "чистая"),
-        "cc_cond_check": ("condition", "надо смотреть"),
-        "cc_kes_100": ("kesanso", "100%"), "cc_kes_no": ("kesanso", "нет"),
-        "cc_med_440": ("medobi", "440000"), "cc_med_450": ("medobi", "450000"),
-        "cc_med_330": ("medobi", "330000"),
-        "cc_mal_now": ("malso", "сразу"),  "cc_mal_tomorrow": ("malso", "завтра"),
-        "cc_mal_2weeks": ("malso", "1-2 недели"),
+        "cc_keys_1": ("keys","1"), "cc_keys_2": ("keys","2"),
+        "cc_cond_clean": ("condition","чистая"), "cc_cond_check": ("condition","надо смотреть"),
+        "cc_kes_100": ("kesanso","100%"), "cc_kes_no": ("kesanso","нет"),
+        "cc_med_440": ("medobi","440000"), "cc_med_450": ("medobi","450000"), "cc_med_330": ("medobi","330000"),
+        "cc_mal_now": ("malso","сразу"), "cc_mal_tomorrow": ("malso","завтра"), "cc_mal_2weeks": ("malso","1-2 недели"),
     }
     if d_key in simple:
         key, val = simple[d_key]
@@ -654,13 +636,13 @@ async def car_button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return FILLING
 
     prompts = {
-        "cc_edit_name":  ("cc_name_input",    "✏️ Введи *марку и модель* (например: KIA K5):"),
-        "cc_edit_plate": ("cc_plate_input",   "✏️ Введи *номер авто* (например: 256수7232):"),
-        "cc_edit_price": ("cc_price_input",   "✏️ Введи *цену* в вонах (например: 26500000):"),
+        "cc_edit_name":  ("cc_name_input",    "✏️ Введи *марку и модель*:"),
+        "cc_edit_plate": ("cc_plate_input",   "✏️ Введи *номер авто*:"),
+        "cc_edit_price": ("cc_price_input",   "✏️ Введи *цену* в вонах:"),
         "cc_kes_input":  ("cc_kesanso_input", "✏️ Введи сумму кесансо:"),
         "cc_med_input":  ("cc_medobi_input",  "✏️ Введи сумму медоби:"),
         "cc_mal_input":  ("cc_malso_input",   "✏️ Введи дату или срок мальсо:"),
-        "cc_edit_city":  ("cc_city_input",    "✏️ Введи *город* (например: Сувон):"),
+        "cc_edit_city":  ("cc_city_input",    "✏️ Введи *город*:"),
     }
     if d_key in prompts:
         field, prompt = prompts[d_key]
@@ -670,42 +652,36 @@ async def car_button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     return FILLING
 
-# ── Car-check: текстовый ввод ─────────────────────────────────────────────────
+# ── Car-check: текстовый ввод конкретного поля ────────────────────────────────
 async def car_text_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     val   = (update.message.text or "").strip()
     field = ctx.user_data.get("cc_waiting")
     cc    = ctx.user_data.setdefault("cc", {})
-
     field_map = {
-        "cc_name_input":    "name",
-        "cc_plate_input":   "plate",
-        "cc_price_input":   "price",
-        "cc_kesanso_input": "kesanso",
-        "cc_medobi_input":  "medobi",
-        "cc_malso_input":   "malso",
-        "cc_city_input":    "city",
+        "cc_name_input": "name", "cc_plate_input": "plate", "cc_price_input": "price",
+        "cc_kesanso_input": "kesanso", "cc_medobi_input": "medobi",
+        "cc_malso_input": "malso", "cc_city_input": "city",
     }
     if field in field_map:
         cc[field_map[field]] = val
         ctx.user_data["cc_waiting"] = None
         await refresh_car_form(ctx)
-
     return FILLING
 
 # ── Assistant: текст и голос ──────────────────────────────────────────────────
 async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action("typing")
-    await process_assistant_message(update, update.message.text)
+    await process_assistant(update, update.message.text)
 
 async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action("typing")
-    voice = update.message.voice
-    file  = await ctx.bot.get_file(voice.file_id)
+    file = await ctx.bot.get_file(update.message.voice.file_id)
     with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
         await file.download_to_drive(tmp.name)
-        text = await transcribe_voice(tmp.name)
+        text = await transcribe(tmp.name, "ru")
+    os.remove(tmp.name)
     await update.message.reply_text(f"🎤 _{text}_", parse_mode="Markdown")
-    await process_assistant_message(update, text)
+    await process_assistant(update, text)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  ЗАПУСК
@@ -713,7 +689,6 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # Car-check conversation
     car_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.TEXT & filters.Regex(r"encar\.com"), handle_encar_link),
@@ -721,7 +696,8 @@ def main():
         states={
             FILLING: [
                 CallbackQueryHandler(car_button_callback, pattern="^cc_"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, car_text_input),
+                MessageHandler(filters.VOICE, car_fill_from_message),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, car_fill_from_message),
             ],
             WAITING_TEXT_INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, car_text_input),
@@ -729,8 +705,7 @@ def main():
             ],
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
-        per_user=True,
-        per_message=False,
+        per_user=True, per_message=False,
     )
 
     app.add_handler(CommandHandler("start", start))
